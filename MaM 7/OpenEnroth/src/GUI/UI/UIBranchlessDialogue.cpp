@@ -1,0 +1,100 @@
+#include <memory>
+
+#include "UIBranchlessDialogue.h"
+
+#include "Engine/Engine.h"
+#include "Engine/AssetsManager.h"
+#include "Engine/Evt/Processor.h"
+#include "Engine/Graphics/Renderer/Renderer.h"
+#include "Engine/Objects/Decoration.h"
+#include "Engine/Party.h"
+#include "Engine/mm7_data.h"
+#include "Engine/Graphics/Viewport.h"
+
+#include "GUI/GUIFont.h"
+#include "GUI/GUIMessageQueue.h"
+#include "GUI/UI/UIHouses.h"
+#include "GUI/UI/UIGame.h"
+
+#include "Io/KeyboardInputHandler.h"
+
+GUIWindow_BranchlessDialogue::GUIWindow_BranchlessDialogue(EvtOpcode event) : GUIWindow(WINDOW_GreetingNPC, {0, 0}, render->GetRenderDimensions()), _event(event) {
+    prev_screen_type = current_screen_type;
+    // Any key closes the dialogue, only an answer to a question is typed.
+    keyboardInputHandler->StartTextInput(event == EVENT_InputString ? Io::TextInputType::Text : Io::TextInputType::AnyKey, 15, this);
+    current_screen_type = SCREEN_BRANCHLESS_NPC_DIALOG;
+
+    CreateCharacterButtons();
+}
+
+GUIWindow_BranchlessDialogue::~GUIWindow_BranchlessDialogue() {
+    current_screen_type = prev_screen_type;
+    keyboardInputHandler->EndTextInput(this);
+}
+
+void GUIWindow_BranchlessDialogue::Update() {
+    if (current_npc_text.length() > 0 && branchless_dialogue_str.empty())
+        branchless_dialogue_str = current_npc_text;
+
+    pGUIWindow_BranchlessDialogue->DrawDialoguePanel(branchless_dialogue_str);
+    render->DrawQuad2D(game_ui_statusbar, {0, 352});
+
+    // TODO(Nik-RE-dev): this code related to text input in MM6/MM8, revisit
+    // this functionality when it's time to support it.
+#if 0
+    if (pGUIWindow_BranchlessDialogue->keyboard_input_status != WINDOW_INPUT_IN_PROGRESS) {
+        if (pGUIWindow_BranchlessDialogue->keyboard_input_status == WINDOW_INPUT_CONFIRMED) {
+            pGUIWindow_BranchlessDialogue->keyboard_input_status = WINDOW_INPUT_NONE;
+            GameUI_StatusBar_OnInput(keyboardInputHandler->GetTextInput());
+        } else {
+            GameUI_StatusBar_ClearInputString();
+        }
+        releaseBranchlessDialogue();
+        return;
+    }
+
+    if (pGUIWindow_BranchlessDialogue->event() == EVENT_InputString) {
+        auto str = fmt::format("{} {}", GameUI_StatusBar_GetInput(), keyboardInputHandler->GetTextInput());
+        pGUIWindow_BranchlessDialogue->DrawText(pFontLucida, {13, 357}, colorTable.White, str);
+        pGUIWindow_BranchlessDialogue->DrawFlashingInputCursor(pFontLucida->GetLineWidth(str) + 13, 357, pFontLucida);
+        return;
+    }
+#endif
+
+    // Close branchless dialog on any keypress
+    if (!keyboardInputHandler->GetTextInput().empty()) {
+        keyboardInputHandler->EndTextInput();
+        engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+        return;
+    }
+
+    // Also close branchless dialog on enter
+    if (pGUIWindow_BranchlessDialogue->keyboard_input_status != WINDOW_INPUT_IN_PROGRESS) {
+        engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+        return;
+    }
+}
+
+void startBranchlessDialogue(int eventid, int entryline, EvtOpcode type) {
+    if (!pGUIWindow_BranchlessDialogue) {
+        animTimer->setPaused(true);
+        gameTimer->setPaused(true);
+        savedEventID = eventid;
+        savedEventStep = entryline;
+        savedDecoration = activeLevelDecoration;
+        pGUIWindow_BranchlessDialogue = std::make_unique<GUIWindow_BranchlessDialogue>(type);
+    }
+}
+
+void releaseBranchlessDialogue() {
+    pGUIWindow_BranchlessDialogue = nullptr;
+    if (savedEventID) {
+        // Do not run event engine whith no event, it may happen when you close talk window
+        // with NPC that only say catch phrases
+        activeLevelDecoration = savedDecoration;
+        eventProcessor(savedEventID, Pid(), 1, savedEventStep);
+    }
+    activeLevelDecoration = nullptr;
+    gameTimer->setPaused(false);
+}
+

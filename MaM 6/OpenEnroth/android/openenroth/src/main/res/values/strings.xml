@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">MaM 6</string>
+    <string name="installer_preparing">Preparing game data…</string>
+    <string name="installer_progress">Installing game data: %1$d / %2$d MB</string>
+    <string name="installer_progress_unknown">Installing game data: %1$d MB</string>
+    <string name="installer_no_space">Not enough free space. %1$d MB needed, %2$d MB available.</string>
+    <string name="installer_failed">Installing game data failed: %1$s</string>
+    <string name="sync_title">Saved games sync</string>
+    <string name="sync_message">Pick a folder the saved games are copied to. Sync it with Google Drive using a sync app and you get the same saves on every device. You can change the folder later by long-pressing the game icon.</string>
+    <string name="sync_pick">Pick folder</string>
+    <string name="sync_later">Not now</string>
+    <string name="sync_running">Syncing saved games…</string>
+    <string name="sync_failed">The save folder is not available, the game runs with the saves on this device.</string>
+    <string name="sync_unavailable">This device cannot pick a folder.</string>
+    <string name="sync_shortcut">Save folder</string>
+</resources>

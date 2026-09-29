@@ -1,0 +1,15 @@
+<resources>
+    <string name="installer_preparing">Připravuji herní data…</string>
+    <string name="installer_progress">Instaluji herní data: %1$d / %2$d MB</string>
+    <string name="installer_progress_unknown">Instaluji herní data: %1$d MB</string>
+    <string name="installer_no_space">Nedostatek místa. Potřeba %1$d MB, volných %2$d MB.</string>
+    <string name="installer_failed">Instalace herních dat selhala: %1$s</string>
+    <string name="sync_title">Synchronizace uložených her</string>
+    <string name="sync_message">Vyber složku, kam se budou kopírovat uložené hry. Když ji synchronizační aplikací propojíš s Google Diskem, uvidíš stejné pozice na všech zařízeních. Složku můžeš později změnit podržením ikony hry.</string>
+    <string name="sync_pick">Vybrat složku</string>
+    <string name="sync_later">Teď ne</string>
+    <string name="sync_running">Synchronizuji uložené hry…</string>
+    <string name="sync_failed">Složka pro uložené hry není dostupná, hra běží s pozicemi z tohoto zařízení.</string>
+    <string name="sync_unavailable">Toto zařízení neumí vybrat složku.</string>
+    <string name="sync_shortcut">Složka pro uložené hry</string>
+</resources>

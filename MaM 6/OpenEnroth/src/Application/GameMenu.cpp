@@ -1,0 +1,432 @@
+#include <memory>
+#include <unordered_set>
+#include <unordered_map>
+#include <string>
+
+#include "GameMenu.h"
+
+#include "Game.h"
+
+#include "Engine/MapEnumFunctions.h"
+#include "Engine/AssetsManager.h"
+#include "Engine/Engine.h"
+#include "Engine/EngineGlobals.h"
+#include "Engine/Graphics/Renderer/Renderer.h"
+#include "Engine/Graphics/Image.h"
+#include "Engine/Localization.h"
+#include "Engine/Party.h"
+#include "Engine/SaveLoad.h"
+#include "Engine/Timer.h"
+#include "Engine/EngineIocContainer.h"
+
+#include "Library/Platform/Interface/PlatformEnums.h"
+#include "Io/InputEnums.h"
+#include "Io/KeyboardInputHandler.h"
+
+#include "GUI/GUIButton.h"
+#include "GUI/GUIMessageQueue.h"
+#include "GUI/UI/UIGame.h"
+#include "GUI/UI/UISaveLoad.h"
+#include "GUI/UI/UIStatusBar.h"
+
+#include "Media/Audio/AudioPlayer.h"
+#include "Utility/MapAccess.h"
+
+using Io::TextInputType;
+
+enum class CurrentConfirmationState {
+    CONFIRM_NONE,
+    CONFIRM_NEW_GAME,
+    CONFIRM_QUIT
+};
+using enum CurrentConfirmationState;
+
+CurrentConfirmationState confirmationState = CONFIRM_NONE;
+
+InputAction currently_selected_action_for_binding = INPUT_ACTION_INVALID;  // 506E68
+std::unordered_set<InputAction> key_map_conflicted;  // 506E6C
+std::unordered_map<InputAction, PlatformKey> curr_key_map;
+
+void Game_StartNewGameWhilePlaying(bool force_start) {
+    if (confirmationState == CONFIRM_NEW_GAME || force_start) {
+        engine->_messageQueue->clear();
+        // pGUIWindow_CurrentMenu->Release();
+        uGameState = GAME_STATE_NEWGAME_OUT_GAMEMENU;
+        current_screen_type = SCREEN_GAME;
+        engine->_statusBar->clearAll();
+    } else {
+        engine->_statusBar->setEvent(LSTR_ARE_YOU_SURE_CLICK_AGAIN_TO_START_A_NEW);
+        pAudioPlayer->playUISound(SOUND_quest);
+        confirmationState = CONFIRM_NEW_GAME;
+    }
+}
+
+void Game_QuitGameWhilePlaying(bool force_quit) {
+    if (confirmationState == CONFIRM_QUIT || force_quit) {
+        engine->_messageQueue->clear();
+        // pGUIWindow_CurrentMenu->Release();
+        current_screen_type = SCREEN_GAME;
+        pAudioPlayer->stopSounds();
+        pAudioPlayer->playUISound(SOUND_WoodDoorClosing);
+        uGameState = GAME_STATE_GAME_QUITTING_TO_MAIN_MENU;
+        engine->_statusBar->clearAll();
+    } else {
+        engine->_statusBar->setEvent(LSTR_ARE_YOU_SURE_CLICK_AGAIN_TO_QUIT);
+        pAudioPlayer->playUISound(SOUND_quest);
+        confirmationState = CONFIRM_QUIT;
+    }
+}
+
+void Game_OpenLoadGameDialog() {
+    engine->_messageQueue->clear();
+    engine->_statusBar->clearEvent();
+    // LoadUI_Load(1);
+    current_screen_type = SCREEN_LOADGAME;
+    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_Load>(true);
+}
+
+Menu::Menu() {
+    mouse = EngineIocContainer::ResolveMouse();
+}
+
+Menu::~Menu() = default;
+
+void Menu::EventLoop() {
+    while (engine->_messageQueue->haveMessages()) {
+        UIMessageType msg;
+        int param, param2;
+        engine->_messageQueue->popMessage(&msg, &param, &param2);
+
+        switch (msg) {
+            case UIMSG_StartNewGame:
+                Game_StartNewGameWhilePlaying(param);
+                continue;
+            case UIMSG_Quit:
+                Game_QuitGameWhilePlaying(param);
+                continue;
+            case UIMSG_Game_OpenLoadGameDialog:
+                Game_OpenLoadGameDialog();
+                continue;
+
+            case UIMSG_ArrowUp:
+                saveLoadMenu()->scrollUp();
+                new OnButtonClick(pBtnArrowUp->rect.topLeft(), {17, 17}, pBtnArrowUp);
+                continue;
+
+            case UIMSG_DownArrow:
+                saveLoadMenu()->scrollDown();
+                new OnButtonClick(pBtnDownArrow->rect.topLeft(), {17, 17}, pBtnDownArrow);
+                continue;
+
+            case UIMSG_Cancel:
+                new OnCancel(pBtnCancel->rect.topLeft(), {106, 42}, pBtnCancel);
+                continue;
+
+            case UIMSG_SaveLoadBtn:
+                new OnSaveLoad(pBtnLoadSlot->rect.topLeft(), {106, 42}, pBtnLoadSlot);
+                continue;
+            case UIMSG_SelectLoadSlot:
+                saveLoadMenu()->slotClicked(param, param2);
+                continue;
+            case UIMSG_LoadGame:
+                if (saveLoadMenu()->hasSelectedSlot()) {
+                    loadGame(saveLoadMenu()->selectedSlot().fileName);
+                    uGameState = GAME_STATE_LOADING_GAME;
+                }
+                continue;
+            case UIMSG_SaveGame: {
+                pAudioPlayer->playUISound(SOUND_StartMainChoice02);
+                GUIWindow_SaveLoad *menu = saveLoadMenu();
+                if (pGUIWindow_CurrentMenu->keyboard_input_status == WINDOW_INPUT_IN_PROGRESS) {
+                    if (keyboardInputHandler->GetTextInput().empty())
+                        continue; // Saves need a name, keep the input open.
+                    menu->setSelectedSlotName(keyboardInputHandler->GetTextInput());
+                    keyboardInputHandler->EndTextInput();
+                } else if (menu->selectedSlot().fileName.empty() && menu->selectedSlot().header.name.empty()) {
+                    // Don't just save into the new save slot, ask for the save name first.
+                    keyboardInputHandler->StartTextInput(TextInputType::Text, 19, pGUIWindow_CurrentMenu.get());
+                    continue;
+                }
+                doSavegame(menu->selectedSlot().fileName, menu->selectedSlot().header.name);
+                continue;
+            }
+            case UIMSG_Game_OpenSaveGameDialog: {
+                if (isArenaMap(engine->_currentLoadedMapId)) {
+                    engine->_statusBar->setEvent(LSTR_NO_SAVING_IN_THE_ARENA);
+                    pAudioPlayer->playUISound(SOUND_error);
+                } else {
+                    engine->_statusBar->clearEvent();
+                    current_screen_type = SCREEN_SAVEGAME;
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_Save>();
+                }
+                continue;
+            }
+            case UIMSG_SaveLoadScroll:
+                saveLoadMenu()->scrollWithMouse(mouse->position());
+                continue;
+            case UIMSG_Game_OpenOptionsDialog:  // Open
+            {
+                engine->_messageQueue->clear();
+
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameOptions>();
+                current_screen_type = SCREEN_OPTIONS;
+
+                continue;
+            }
+
+            case UIMSG_OpenKeyMappingOptions:  // Open
+            {
+                engine->_messageQueue->clear();
+
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameKeyBindings>();  // GameMenuUI_OptionsKeymapping_Load();
+                current_screen_type = SCREEN_KEYBOARD_OPTIONS;
+
+                continue;
+            }
+
+            case UIMSG_ChangeKeyButton: {
+                if (currently_selected_action_for_binding != INPUT_ACTION_INVALID) {
+                    pAudioPlayer->playUISound(SOUND_error);
+                } else {
+                    currently_selected_action_for_binding = (InputAction)param;
+                    if (KeyboardPageNum != 1)
+                        currently_selected_action_for_binding = (InputAction)(param + 14);
+                    keyboardInputHandler->StartTextInput(TextInputType::Text, 1, pGUIWindow_CurrentMenu.get());
+                }
+                continue;
+            }
+
+            case UIMSG_ResetKeyMapping: {
+                curr_key_map = keyboardActionMapping->defaultKeybindings(KEYBINDINGS_CONFIGURABLE);
+                keyboardActionMapping->applyKeybindings(curr_key_map);
+                key_map_conflicted.clear();
+                pAudioPlayer->playUISound(SOUND_chimes);
+                continue;
+            }
+
+            case UIMSG_SelectKeyPage1:
+                KeyboardPageNum = 1;
+                continue;
+            case UIMSG_SelectKeyPage2:
+                KeyboardPageNum = 2;
+                continue;
+
+            case UIMSG_OpenVideoOptions: {
+                engine->_messageQueue->clear();
+
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameVideoOptions>();
+                current_screen_type = SCREEN_VIDEO_OPTIONS;
+
+                continue;
+            }
+
+            case UIMSG_ChangeGammaLevel: {
+                int gammalevel = engine->config->graphics.Gamma.value();
+                if (param == 4) {
+                    gammalevel--;
+                    new OnButtonClick({21, 161}, {0, 0}, pBtn_SliderLeft, std::string(), false);
+                } else if (param == 5) {
+                    gammalevel++;
+                    new OnButtonClick({213, 161}, {0, 0}, pBtn_SliderRight, std::string(), false);
+                } else {
+                    Pointi pt = mouse->position();
+                    gammalevel = (pt.x - 42) / 17;
+                }
+
+                engine->config->graphics.Gamma.setValue(gammalevel);
+                pAudioPlayer->playUISound(SOUND_ClickMovingSelector);
+
+                if (gamma_preview_image) {
+                    gamma_preview_image->release();
+                    gamma_preview_image = nullptr;
+                }
+
+                gamma_preview_image = GraphicsImage::Create(render->MakeViewportScreenshot(155, 117));
+                continue;
+            }
+            case UIMSG_ToggleBloodsplats:
+                engine->config->graphics.BloodSplats.toggle();
+                continue;
+            case UIMSG_ToggleColoredLights:
+                engine->config->graphics.ColoredLights.toggle();
+                continue;
+            case UIMSG_ToggleTint:
+                engine->config->graphics.Tinting.toggle();
+                continue;
+
+            case UIMSG_ChangeMusicVolume: {
+                int new_level = engine->config->settings.MusicLevel.value();
+                if (param == 4) {
+                    new_level -= 1;
+                    new OnButtonClick(volumeArrowPos(VOLUME_SLIDER_MUSIC, false), {0, 0}, pBtn_SliderLeft, std::string(), false);
+                } else if (param == 5) {
+                    new_level += 1;
+                    new OnButtonClick(volumeArrowPos(VOLUME_SLIDER_MUSIC, true), {0, 0}, pBtn_SliderRight, std::string(), false);
+                } else {
+                    Pointi pt = mouse->position();
+                    new_level = volumeLevelAt(pt.x);
+                }
+
+                engine->config->settings.MusicLevel.setValue(new_level);
+                pAudioPlayer->SetMusicVolume(engine->config->settings.MusicLevel.value());
+                pAudioPlayer->playSound(SOUND_hurp, SOUND_MODE_MUSIC);
+                continue;
+            }
+
+            case UIMSG_ChangeSoundVolume: {
+                int new_level = engine->config->settings.SoundLevel.value();
+                if (param == 4) {
+                    new_level -= 1;
+                    new OnButtonClick(volumeArrowPos(VOLUME_SLIDER_SOUND, false), {0, 0}, pBtn_SliderLeft, std::string(), false);
+                } else if (param == 5) {
+                    new_level += 1;
+                    new OnButtonClick(volumeArrowPos(VOLUME_SLIDER_SOUND, true), {0, 0}, pBtn_SliderRight, std::string(), false);
+                } else {
+                    Pointi pt = mouse->position();
+                    new_level = volumeLevelAt(pt.x);
+                }
+
+                engine->config->settings.SoundLevel.setValue(new_level);
+
+                pAudioPlayer->SetMasterVolume(engine->config->settings.SoundLevel.value());
+                pAudioPlayer->playExclusiveSound(SOUND_church);
+                continue;
+            }
+            case UIMSG_ToggleFlipOnExit:
+                engine->config->settings.FlipOnExit.toggle();
+                continue;
+            case UIMSG_ToggleAlwaysRun:
+                engine->config->settings.AlwaysRun.toggle();
+                continue;
+            case UIMSG_ToggleWalkSound:
+                engine->config->settings.WalkSound.toggle();
+                continue;
+            case UIMSG_ToggleShowDamage:
+                engine->config->settings.ShowHits.toggle();
+                continue;
+            case UIMSG_ChangeVoiceVolume: {
+                int new_level = engine->config->settings.VoiceLevel.value();
+                if (param == 4) {
+                    new_level -= 1;
+                    new OnButtonClick(volumeArrowPos(VOLUME_SLIDER_VOICE, false), {0, 0}, pBtn_SliderLeft, std::string(), false);
+                } else if (param == 5) {
+                    new_level += 1;
+                    new OnButtonClick(volumeArrowPos(VOLUME_SLIDER_VOICE, true), {0, 0}, pBtn_SliderRight, std::string(), false);
+                } else {
+                    Pointi pt = mouse->position();
+                    new_level = volumeLevelAt(pt.x);
+                }
+
+                engine->config->settings.VoiceLevel.setValue(new_level);
+                pAudioPlayer->SetVoiceVolume(engine->config->settings.VoiceLevel.value());
+                if (engine->config->settings.VoiceLevel.value() > 0) {
+                    pAudioPlayer->playSound(SOUND_hf445a, SOUND_MODE_SPEECH);
+                }
+                continue;
+            }
+            case UIMSG_SetTurnSpeed:
+                if (param)
+                    pParty->_viewYaw = param * pParty->_viewYaw / param;
+                engine->config->settings.TurnSpeed.setValue(param);
+                continue;
+
+            case UIMSG_SetGraphicsMode:
+                assert(false);  // Nomad: graphicsmode as it was now removed
+                continue;
+
+            case UIMSG_GameMenu_ReturnToGame:
+                // pGUIWindow_CurrentMenu->Release();
+                gameTimer->setPaused(false);
+                current_screen_type = SCREEN_GAME;
+                continue;
+
+            case UIMSG_Escape:
+                confirmationState = CONFIRM_NONE;
+
+                if (current_screen_type == SCREEN_MENU) {
+                    gameTimer->setPaused(false);
+                    current_screen_type = SCREEN_GAME;
+                } else if (current_screen_type == SCREEN_SAVEGAME ||
+                           current_screen_type == SCREEN_LOADGAME) {
+                    current_screen_type = SCREEN_MENU;
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameMenu>();
+                } else if (current_screen_type == SCREEN_OPTIONS) {
+                    options_menu_skin.Release();
+                    current_screen_type = SCREEN_MENU;
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameMenu>();
+                } else if (current_screen_type == SCREEN_VIDEO_OPTIONS) {
+                    current_screen_type = SCREEN_MENU;
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameMenu>();
+                } else if (current_screen_type == SCREEN_KEYBOARD_OPTIONS) {
+                    bool hasConflicts = !key_map_conflicted.empty();
+
+                    if (hasConflicts) {
+                        pAudioPlayer->playUISound(SOUND_error);
+                        break; // deny to exit options until all key conflicts are solved
+                    } else {
+                        for (int i = 0; i < 5; i++) {
+                            if (game_ui_options_controls[i]) {
+                                game_ui_options_controls[i]->release();
+                                game_ui_options_controls[i] = nullptr;
+                            }
+                        }
+
+                        keyboardActionMapping->applyKeybindings(curr_key_map);
+                    }
+
+                    current_screen_type = SCREEN_MENU;
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameMenu>();
+                }
+                continue;
+            case UIMSG_QuickLoad:
+                quickLoadGame();
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void Menu::MenuLoop() {
+    gameTimer->setPaused(true);
+    current_screen_type = SCREEN_MENU;
+
+    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_GameMenu>();
+    confirmationState = CONFIRM_NONE;
+
+    if (gamma_preview_image) {
+        gamma_preview_image->release();
+        gamma_preview_image = nullptr;
+    }
+
+    gamma_preview_image = GraphicsImage::Create(render->MakeViewportScreenshot(155, 117));
+
+    pParty->resetCharacterEmotions();
+
+    while (uGameState == GAME_STATE_PLAYING &&
+           (current_screen_type == SCREEN_MENU ||
+            current_screen_type == SCREEN_SAVEGAME ||
+            current_screen_type == SCREEN_LOADGAME ||
+            current_screen_type == SCREEN_OPTIONS ||
+            current_screen_type == SCREEN_VIDEO_OPTIONS ||
+            current_screen_type == SCREEN_KEYBOARD_OPTIONS)) {
+        MessageLoopWithWait();
+
+        GameUI_WritePointedObjectStatusString();
+        render->BeginScene2D();
+        engine->DrawGUI();
+        GUI_UpdateWindows();
+        engine->_statusBar->draw();
+        mouse->DrawCursor();
+        render->Present();
+
+        EventLoop();
+    }
+
+    pGUIWindow_CurrentMenu = nullptr;
+
+    if (gamma_preview_image) {
+        gamma_preview_image->release();
+        gamma_preview_image = nullptr;
+    }
+}

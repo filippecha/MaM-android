@@ -1,0 +1,70 @@
+diff --git a/src/GUI/UI/UIBranchlessDialogue.cpp b/src/GUI/UI/UIBranchlessDialogue.cpp
+index c775150..ec0ab44 100644
+--- a/src/GUI/UI/UIBranchlessDialogue.cpp
++++ b/src/GUI/UI/UIBranchlessDialogue.cpp
+@@ -20,7 +20,8 @@
+ 
+ GUIWindow_BranchlessDialogue::GUIWindow_BranchlessDialogue(EvtOpcode event) : GUIWindow(WINDOW_GreetingNPC, {0, 0}, render->GetRenderDimensions()), _event(event) {
+     prev_screen_type = current_screen_type;
+-    keyboardInputHandler->StartTextInput(Io::TextInputType::Text, 15, this);
++    // Any key closes the dialogue, only an answer to a question is typed.
++    keyboardInputHandler->StartTextInput(event == EVENT_InputString ? Io::TextInputType::Text : Io::TextInputType::AnyKey, 15, this);
+     current_screen_type = SCREEN_BRANCHLESS_NPC_DIALOG;
+ 
+     CreateCharacterButtons();
+diff --git a/src/Io/KeyboardActionMapping.h b/src/Io/KeyboardActionMapping.h
+index 77aafdf..f64fa29 100644
+--- a/src/Io/KeyboardActionMapping.h
++++ b/src/Io/KeyboardActionMapping.h
+@@ -20,6 +20,7 @@ enum class TextInputType {
+     None = 0,
+     Text = 1,
+     Number = 2,
++    AnyKey = 3, // Typed text only tells that a key was pressed, so there's no on-screen keyboard.
+ };
+ 
+ using Keybindings = std::unordered_map<InputAction, PlatformKey>;
+diff --git a/src/Io/KeyboardInputHandler.cpp b/src/Io/KeyboardInputHandler.cpp
+index 05a5519..12cfa91 100644
+--- a/src/Io/KeyboardInputHandler.cpp
++++ b/src/Io/KeyboardInputHandler.cpp
+@@ -419,7 +419,7 @@ void Io::KeyboardInputHandler::SetWindowInputStatus(WindowInputStatus status) {
+ //----- (00459F10) --------------------------------------------------------
+ bool Io::KeyboardInputHandler::ProcessTextInput(PlatformKey key, int c) {
+     if (currently_selected_action_for_binding == INPUT_ACTION_INVALID) {
+-        if (inputType != TextInputType::Text && inputType != TextInputType::Number) {
++        if (inputType == TextInputType::None) {
+             return false;
+         }
+ 
+@@ -432,11 +432,11 @@ bool Io::KeyboardInputHandler::ProcessTextInput(PlatformKey key, int c) {
+         } else if (key == PlatformKey::KEY_ESCAPE) {
+             SetWindowInputStatus(WINDOW_INPUT_NONE);
+         } else if (key == PlatformKey::KEY_SPACE && pPressedKeysBuffer.size() < this->max_input_string_len) {
+-            if (inputType == TextInputType::Text) {
++            if (inputType == TextInputType::Text || inputType == TextInputType::AnyKey) {
+                 pPressedKeysBuffer.push_back(' ');
+             }
+         } else if (key == PlatformKey::KEY_CHAR && pPressedKeysBuffer.size() < this->max_input_string_len) {
+-            if (inputType == TextInputType::Text) {
++            if (inputType == TextInputType::Text || inputType == TextInputType::AnyKey) {
+                 pPressedKeysBuffer.push_back(c);
+             } else if (inputType == TextInputType::Number && isdigit(c)) {
+                 pPressedKeysBuffer.push_back(c);
+diff --git a/src/Io/KeyboardInputHandler.h b/src/Io/KeyboardInputHandler.h
+index 943ccd2..33b6d6a 100644
+--- a/src/Io/KeyboardInputHandler.h
++++ b/src/Io/KeyboardInputHandler.h
+@@ -49,8 +49,11 @@ class KeyboardInputHandler {
+ 
+     void StartTextInput(TextInputType type, int max_string_len, GUIWindow *pWindow);
+ 
++    /**
++     * @return                          Whether the player is typing text or a number, and needs a keyboard for that.
++     */
+     [[nodiscard]] bool IsTextInputActive() const {
+-        return inputType != TextInputType::None;
++        return inputType == TextInputType::Text || inputType == TextInputType::Number;
+     }
+     bool ProcessTextInput(PlatformKey key, int c);
+     void EndTextInput();

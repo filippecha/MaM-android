@@ -1,0 +1,149 @@
+#include <string>
+#include <memory>
+#include <utility>
+
+#include "GameOver.h"
+
+#include "Engine/AssetsManager.h"
+#include "Engine/Engine.h"
+#include "Engine/Resources/ResourceManager.h"
+#include "Engine/Resources/EngineFileSystem.h"
+#include "Engine/Graphics/Renderer/Renderer.h"
+#include "Engine/Graphics/Image.h"
+#include "Engine/Localization.h"
+#include "Engine/Party.h"
+#include "Engine/mm7_data.h"
+
+#include "GUI/GUIFont.h"
+#include "GUI/GUIWindow.h"
+#include "GUI/UI/UIHouses.h"
+
+#include "Media/Audio/AudioPlayer.h"
+
+#include "Core/Time/Time.h"
+
+#include "Library/Image/Pcx.h"
+
+#include "Utility/GameVariant.h"
+#include "Utility/String/Split.h"
+#include "Utility/String/Transformations.h"
+
+
+//----- (004BF91E) --------------------------------------------------------
+void GameOver_Setup() {
+    dword_6BE364_game_settings_1 &= ~GAME_SETTINGS_4000;
+    GameOverNoSound = true;
+    pAudioPlayer->stopSounds();
+
+    // break out of house and dialogue
+    window_SpeakInHouse = nullptr;
+    pDialogueWindow = nullptr;
+}
+
+static GraphicsImage *finishCertificate(GraphicsImage *background);
+
+/**
+ * @return                              Ending text from MM6 win.str or lose.str.
+ */
+static std::string mm6EndingText(bool lost) {
+    Blob data = engine->resources()->eventsData(lost ? "lose.str" : "win.str");
+    for (std::string_view text : split(data.str()).by('\0'))
+        if (!trim(text).empty())
+            return std::string(text);
+    return {};
+}
+
+GraphicsImage *CreateWinnerCertificate(bool lost) {
+    render->Present();
+    render->BeginScene2D();
+    GraphicsImage *background = assets->getImage_PCXFromIconsLOD(lost ? "losebg.pcx" : "winbg.pcx");
+    render->DrawQuad2D(background, {0, 0});
+
+    std::unique_ptr<GUIWindow> tempwindow_SpeakInHouse = std::make_unique<GUIWindow>(WINDOW_Unknown, Pointi{ 0, 0 }, render->GetRenderDimensions());
+    Recti frameRect(75, 60, isMm6() ? 495 : 469, 338);
+    std::unique_ptr<GUIFont> pFont = GUIFont::LoadFont("endgame.fnt");
+
+    std::string pInString;
+    if (isMm6()) {
+        pInString = mm6EndingText(lost);
+    } else if (isMm8()) {
+        pInString = localization->mm8Str(676); // MM8.exe 0x4BFB49, MM8 has one ending.
+    } else if (pParty->isPartyGood()) {
+        pInString = localization->str(LSTR_GOOD_ENDING);
+    } else if (pParty->isPartyEvil()) {
+        pInString = localization->str(LSTR_EVIL_ENDING);
+    } else {
+        assert(false);
+    }
+
+    Duration play_time = pParty->GetPlayingTime() - gameStartingTime;
+
+    int totalDays = play_time.days();
+    if (!totalDays) totalDays = 1;
+
+    LongCivilDuration duration = play_time.toLongCivilDuration();
+    int years = duration.years;
+    int months = duration.months;
+    int days = duration.days;
+
+    GUIWindow::DrawTitleText(
+        pFont.get(), 1, 0x23, colorTable.Black, localization->str(LSTR_CONGRATULATIONS), 3, frameRect
+    );
+    if (lost) { // MM6.exe 0x4A7057.
+        GUIWindow::DrawTitleText(pFont.get(), 1, 110, colorTable.Black, pFont->WrapText(pInString, frameRect.w, 12), 0, frameRect);
+        return finishCertificate(background);
+    }
+    uint64_t v23 = 0ull;
+    int v20 = 0;
+    for (int i = 0; i < pParty->pCharacters.size(); i++) {
+        GUIWindow::DrawTitleText(
+            pFont.get(), 1,
+            i * (pFont->GetHeight() - 2) + pFont->GetHeight() + 46,
+            colorTable.Black,
+            localization->format(
+                LSTR_S_THE_LEVEL_U_S,
+                pParty->pCharacters[i].name,
+                pParty->pCharacters[i].GetBaseLevel(),
+                localization->className(pParty->pCharacters[i].classType)),
+            3, frameRect);
+        v23 += pParty->pCharacters[i].experience;
+    }
+    v23 = (int64_t)v23 / totalDays;
+    std::string v6 = pFont->WrapText(pInString, frameRect.w, 12);
+    GUIWindow::DrawTitleText(pFont.get(), 1, 5 * (pFont->GetHeight() + 11), colorTable.Black, v6, 0, frameRect);
+
+    std::string v7 = localization->str(LSTR_DAY_CAPITALIZED);
+    if (days != 1) v7 = localization->str(LSTR_DAYS);
+
+    std::string v8 = localization->str(LSTR_MONTH);
+    if (months != 1) v8 = localization->str(LSTR_MONTHS);
+
+    std::string v9 = localization->str(LSTR_YEAR);
+    if (years != 1) v9 = localization->str(LSTR_YEARS);
+
+    GUIWindow::DrawTitleText(
+        pFont.get(), 1, frameRect.h - 2 * pFont->GetHeight() - 5, colorTable.Black,
+        fmt::format("{} {} {}, {} {}, {} {} ", localization->str(LSTR_TOTAL_TIME), years, v9, months, v8, days, v7), 3, frameRect);
+
+    GUIWindow::DrawTitleText(pFont.get(), 1, frameRect.h, colorTable.Black,
+        localization->format(LSTR_YOUR_SCORE_LU, v23), 3, frameRect);
+    return finishCertificate(background);
+}
+
+static GraphicsImage *finishCertificate(GraphicsImage *background) {
+    dword_6BE364_game_settings_1 |= GAME_SETTINGS_4000;
+
+    // flush draw buffer so cert is drawn
+    render->DrawTwodVerts();
+    render->EndLines2D();
+    render->EndTextNew();
+
+    RgbaImage pixels = render->MakeFullScreenshot();
+    ufs->write(isMm6() ? "MM6_Win.Pcx" : "MM7_Win.Pcx", pcx::encode(pixels)); // The final message names this file.
+    GraphicsImage *result = GraphicsImage::Create(std::move(pixels));
+
+    background->release();
+    background = nullptr;
+
+    return result;
+}

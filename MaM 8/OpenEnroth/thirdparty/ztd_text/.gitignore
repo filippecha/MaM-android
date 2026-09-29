@@ -1,0 +1,13 @@
+/.cmake/
+/build/
+/install/
+.mypy_cache/
+/CMakeUserPresets.json
+
+.vscode/
+
+.vs/
+CMakeSettings.json
+
+/main.cpp
+/*.hex

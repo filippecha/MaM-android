@@ -1,0 +1,189 @@
+#include "PathResolver.h"
+
+#include <string>
+#include <vector>
+#include <filesystem>
+
+#include "Library/Logger/Logger.h"
+#include "Library/Environment/Interface/Environment.h"
+#include "Library/FileSystem/Directory/DirectoryFileSystem.h"
+#include "Library/FileSystem/Lowercase/LowercaseFileSystem.h"
+
+#include "Utility/GameVariant.h"
+
+static const std::vector<std::string_view> mm7ValidateList = {
+    {"anims/magic7.vid"},
+    {"anims/might7.vid"},
+    {"data/bitmaps.lod"},
+//    {"data/d3dbitmap.hwl"}, // We're not using HWL textures, so these are not required.
+//    {"data/d3dsprite.hwl"},
+    {"data/events.lod"},
+    {"data/games.lod"},
+    {"data/icons.lod"},
+    {"data/sprites.lod"},
+    {"sounds/audio.snd"}
+};
+
+// MM6 keeps its event scripts and text tables in icons.lod, there is no events.lod.
+static const std::vector<std::string_view> mm6ValidateList = {
+    {"anims/anims1.vid"},
+    {"anims/anims2.vid"},
+    {"data/bitmaps.lod"},
+    {"data/games.lod"},
+    {"data/icons.lod"},
+    {"data/sprites.lod"},
+    {"sounds/audio.snd"}
+};
+
+// MM8 keeps its event scripts and text tables in EnglishT.lod and its sounds in EnglishD.lod.
+static const std::vector<std::string_view> mm8ValidateList = {
+    {"anims/magicdod.vid"},
+    {"anims/mightdod.vid"},
+    {"data/bitmaps.lod"},
+    {"data/englishd.lod"},
+    {"data/englisht.lod"},
+    {"data/games.lod"},
+    {"data/icons.lod"},
+    {"data/sprites.lod"}
+};
+
+struct PathResolutionConfig {
+    const char *overrideEnvKey = nullptr;
+    const std::vector<const char *> registryKeys;
+
+    constexpr PathResolutionConfig(const char* overrideEnvKey, std::initializer_list<const char*> registryKeys)
+        : overrideEnvKey(overrideEnvKey), registryKeys(registryKeys) {}
+};
+
+static const PathResolutionConfig mm6Config = {
+    mm6PathOverrideKey,
+    {
+        "HKEY_LOCAL_MACHINE/SOFTWARE/GOG.com/Games/1207661253/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/GOG.com/GOGMM6/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/New World Computing/Might and Magic\xC2\xAE VI/1.0/AppPath", // \xC2\xAE is (R) in utf-8.
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/GOG.com/Games/1207661253/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/GOG.com/GOGMM6/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/New World Computing/Might and Magic\xC2\xAE VI/1.0/AppPath"
+    }
+};
+
+static const PathResolutionConfig mm7Config = {
+    mm7PathOverrideKey,
+    {
+        "HKEY_LOCAL_MACHINE/SOFTWARE/GOG.com/Games/1207658916/Path",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/GOG.com/GOGMM7/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/New World Computing/Might and Magic VII/1.0/AppPath",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/GOG.com/Games/1207658916/Path",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/GOG.com/GOGMM7/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/New World Computing/Might and Magic VII/1.0/AppPath"
+    }
+};
+
+static const PathResolutionConfig mm8Config = {
+    mm8PathOverrideKey,
+    {
+        "HKEY_LOCAL_MACHINE/SOFTWARE/GOG.com/GOGMM8/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/New World Computing/Might and Magic Day of the Destroyer/1.0/AppPath",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/GOG.com/GOGMM8/PATH",
+        "HKEY_LOCAL_MACHINE/SOFTWARE/WOW6432Node/New World Computing/Might and Magic Day of the Destroyer/1.0/AppPath"
+    }
+};
+
+static std::vector<NativePath> resolvePaths(Environment *environment, const PathResolutionConfig &config) {
+    // If we have a path override then it'll be the only path we'll check.
+    std::string envPath = environment->getenv(config.overrideEnvKey);
+    if (!envPath.empty()) {
+        MM_INFO("Path override provided, '{}={}'.", config.overrideEnvKey, envPath);
+        return {NativePath::fromWtf8(envPath)};
+    }
+
+    std::vector<NativePath> result;
+
+    // Otherwise we check PWD first.
+    result.push_back(NativePath::fromStdPath(std::filesystem::current_path()));
+
+    // Then we check paths from registry on Windows,...
+    for (const char *registryKey : config.registryKeys) {
+        if (registryKey) {
+            std::string registryPath = environment->queryRegistry(registryKey);
+            if (!registryPath.empty())
+                result.push_back(NativePath::fromWtf8(registryPath));
+        }
+    }
+
+#ifdef __ANDROID__
+    // ...Android storage paths on Android,...
+    std::string externalPath = environment->path(PATH_ANDROID_STORAGE_EXTERNAL);
+    if (!externalPath.empty())
+        result.push_back(NativePath::fromWtf8(externalPath));
+    std::string internalPath = environment->path(PATH_ANDROID_STORAGE_INTERNAL);
+    if (!internalPath.empty())
+        result.push_back(NativePath::fromWtf8(internalPath));
+    // TODO(captainurist): need a mechanism to show user-visible errors. Commenting out for now.
+    //if (ANDROID && result.empty())
+    //    platform->showMessageBox("Device currently unsupported", "Your device doesn't have any storage so it is unsupported!");
+#endif
+
+#ifdef __APPLE__
+    // ...or Library/Application Support in home on macOS.
+    std::string home = environment->path(PATH_HOME);
+    if (!home.empty())
+        result.push_back(NativePath::fromWtf8(home + "/Library/Application Support/OpenEnroth"));
+#endif
+
+    return result;
+}
+
+std::vector<NativePath> resolveMm6Paths(Environment *environment) {
+    return resolvePaths(environment, mm6Config);
+}
+
+std::vector<NativePath> resolveMm7Paths(Environment *environment) {
+    return resolvePaths(environment, mm7Config);
+}
+
+std::vector<NativePath> resolveMm8Paths(Environment *environment) {
+    return resolvePaths(environment, mm8Config);
+}
+
+static bool validateList(const std::vector<std::string_view> &list, const LowercaseFileSystem &lowerFs, std::string *missingFile) {
+    for (std::string_view entry : list) {
+        if (!lowerFs.exists(entry)) {
+            *missingFile = entry;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateMm7Path(const NativePath &dataPath, std::string *missingFile) {
+    DirectoryFileSystem dirFs(dataPath);
+    LowercaseFileSystem lowerFs(&dirFs);
+
+    if (lowerFs.exists("data/englisht.lod")) {
+        gameVariant = GameVariant::MM8;
+        return validateList(mm8ValidateList, lowerFs, missingFile);
+    }
+
+    std::string mm6MissingFile;
+    if (validateList(mm6ValidateList, lowerFs, &mm6MissingFile) && !lowerFs.exists("data/events.lod")) {
+        gameVariant = GameVariant::MM6;
+        return true;
+    }
+
+    gameVariant = GameVariant::MM7;
+    return validateList(mm7ValidateList, lowerFs, missingFile);
+}
+
+NativePath resolveMm7UserPath(Environment *environment) {
+#ifdef _WINDOWS
+    std::string savedGames = environment->path(PATH_WINDOWS_SAVED_GAMES);
+    if (savedGames.empty())
+        return {}; // Shouldn't really happen.
+    return NativePath::fromWtf8(fmt::format("{}/OpenEnroth", savedGames));
+#elif __ANDROID__
+    return NativePath::fromWtf8(fmt::format("{}/.openenroth", environment->path(PATH_ANDROID_STORAGE_INTERNAL)));
+#else // Mac & linux
+    return NativePath::fromWtf8(fmt::format("{}/.openenroth", environment->path(PATH_HOME)));
+#endif
+}

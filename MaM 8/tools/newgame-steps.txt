@@ -1,0 +1,1 @@
+key Escape;key Escape;key Escape;sleep 2;mousemove 567 218;click 1;sleep 3;mousemove 587 455;click 1;sleep 20;mousemove 555 445;click 1;sleep 2

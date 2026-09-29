@@ -1,0 +1,1301 @@
+#include <unordered_set>
+#include <vector>
+#include <utility>
+
+#include "Testing/Game/GameTest.h"
+
+#include "GUI/GUIWindow.h"
+#include "GUI/GUIButton.h"
+#include "GUI/UI/UIStatusBar.h"
+#include "GUI/UI/UIHouses.h"
+#include "GUI/UI/UIRest.h"
+
+#include "Engine/Tables/TextureFrameTable.h"
+#include "Engine/Tables/NPCTable.h"
+#include "Engine/Objects/Actor.h"
+#include "Engine/Objects/CharacterEnumFunctions.h"
+#include "Engine/Objects/NPC.h"
+#include "Engine/Objects/SpriteObject.h"
+#include "Engine/Graphics/Indoor.h"
+#include "Engine/Graphics/Vis.h"
+#include "Engine/Graphics/Image.h"
+#include "Engine/AssetsManager.h"
+#include "Engine/Party.h"
+#include "Engine/Engine.h"
+#include "Engine/Resources/LOD.h"
+#include "Engine/SaveLoad.h"
+#include "Engine/PriceCalculator.h"
+#include "Engine/Graphics/Outdoor.h"
+#include "Engine/Graphics/ParticleEngine.h"
+#include "Engine/Random/Random.h"
+#include "Engine/TurnEngine/TurnEngine.h"
+
+#include "Media/Audio/AudioPlayer.h"
+
+#include "Io/Mouse.h"
+
+#include "Utility/Lambda.h"
+
+#include "GameTestCommon.h"
+
+static void hireBabyDragon() {
+    pNPCStats->pNPCData[57].flags |= NPC_HIRED; // The index PartyHasDragon reads.
+    pParty->CountHirelings();
+}
+
+static bool characterHasJar(int charIndex, int jarIndex) {
+    for (InventoryEntry jar : pParty->pCharacters[charIndex].inventory.entries(ITEM_QUEST_LICH_JAR_FULL))
+        if (jar->lichJarCharacterIndex == jarIndex)
+            return true;
+    return false;
+}
+
+// 1000
+
+GAME_TEST(Issues, Issue1004) {
+    // Collisions: Can walk right through the bridge on Emerald Isle
+    auto xTape = tapes.custom([] { return pParty->pos.x; });
+    test.playTraceFromTestData("issue_1004.mm7", "issue_1004.json");
+    EXPECT_LT(xTape.max(), 12552 + 1);
+}
+
+GAME_TEST(Prs, Pr1005) {
+    // Testing collisions - stairs should work. In this test case the party is walking onto a wooden paving in Tatalia.
+    auto zTape = tapes.custom([] { return pParty->pos.z; });
+    test.playTraceFromTestData("pr_1005.mm7", "pr_1005.json");
+    EXPECT_EQ(zTape.frontBack(), tape(155, 193)); // Paving is at z=192, party z should be this value +1.
+}
+
+GAME_TEST(Issues, Issue1020) {
+    // Test finishing the scavenger hunt quest. The game should not crash when there is no dialogue options.
+    test.playTraceFromTestData("issue_1020.mm7", "issue_1020.json"); // Should not assert
+}
+
+GAME_TEST(Issues, Issue1033) {
+    // Collisions: Getting stuck before wooden paving in Tatalia.
+    // Vanilla bug where the party would be stopped by the vertical face of the paving edge instead of stepping onto
+    // the floor poly above it. The save is positioned just in front of the broken stretch of the Tatalia (Out13.odm)
+    // paving. Before the fix the party could not climb up; after the fix walking forward briefly lifts the party onto
+    // the paving floor (z=192, party z=193) as it crosses the deck.
+    auto zTape = tapes.custom([] { return pParty->pos.z; });
+    auto posTape = tapes.custom([] { return pParty->pos; });
+    test.loadGameFromTestData("issue_1033.mm7");
+    test.startTaping();
+    game.tick();
+    game.pressKey(PlatformKey::KEY_UP);
+    game.tick(20);
+    game.releaseKey(PlatformKey::KEY_UP);
+    game.tick(5);
+    // Party advanced from the starting point instead of being stuck against the paving edge.
+    EXPECT_GT((posTape.back() - posTape.front()).length(), 100.0f);
+    // And actually ended up on the paving.
+    EXPECT_GE(zTape.back(), 193);
+}
+
+GAME_TEST(Issues, Issue1034) {
+    // Crash when casting telekinesis outdoors.
+    auto houseTape = tapes.house();
+    auto statusTape = tapes.statusBar();
+    test.playTraceFromTestData("issue_1034.mm7", "issue_1034.json");
+    EXPECT_CONTAINS(statusTape, "Select Target"); // Telekinesis message.
+    EXPECT_EQ(houseTape, tape(HOUSE_INVALID, HOUSE_WEAPON_SHOP_EMERALD_ISLAND)); // We have entered into the shop.
+}
+
+GAME_TEST(Issues, Issue1036) {
+    // Test that elemental magic guilds teach Learning skill and self magic guilds teach Meditation skill.
+    test.playTraceFromTestData("issue_1036.mm7", "issue_1036.json");
+    EXPECT_TRUE(pParty->pCharacters[2].pActiveSkills[SKILL_LEARNING]);
+    EXPECT_TRUE(pParty->pCharacters[2].pActiveSkills[SKILL_MEDITATION]);
+}
+
+GAME_TEST(Issues, Issue1038) {
+    // Crash while fighting Eyes in Nighon Tunnels.
+    // Was due to how iterating over a table of items blocking specific conditions was implemented, was tripping
+    // either on CONDITION_SLEEP or CONDITION_INSANE - exact condition that used to trigger the bug is now lost to time.
+    test.prepareForNextTest();
+    game.startNewGame();
+    auto conditionsTape = charTapes.conditions();
+    test.startTaping();
+    game.tick();
+    pParty->pCharacters[0].SetCondition(CONDITION_SLEEP, 1);
+    pParty->pCharacters[1].SetCondition(CONDITION_INSANE, 1);
+    game.tick();
+    pParty->pCharacters[0].SetCondition(CONDITION_INSANE, 1);
+    pParty->pCharacters[1].SetCondition(CONDITION_SLEEP, 1);
+    game.tick();
+    pParty->pCharacters[0].receiveDamage(1, DAMAGE_FIRE);
+    game.tick();
+    pParty->pCharacters[0].SetCondition(CONDITION_INSANE, 1);
+    pParty->pCharacters[1].SetCondition(CONDITION_SLEEP, 1);
+    game.tick();
+    pParty->pCharacters[0].SetCondition(CONDITION_SLEEP, 1);
+    pParty->pCharacters[1].SetCondition(CONDITION_INSANE, 1);
+    game.tick();
+    pParty->pCharacters[1].SetCondition(CONDITION_UNCONSCIOUS, 1);
+    game.tick();
+    pParty->pCharacters[1].SetCondition(CONDITION_INSANE, 1);
+    game.tick();
+    pParty->pCharacters[1].SetCondition(CONDITION_SLEEP, 1);
+    game.tick();
+
+    EXPECT_EQ(conditionsTape.frontBack(), tape({ CONDITION_GOOD, CONDITION_GOOD, CONDITION_GOOD, CONDITION_GOOD },
+                                                { CONDITION_SLEEP, CONDITION_UNCONSCIOUS, CONDITION_GOOD, CONDITION_GOOD }));
+}
+
+GAME_TEST(Issues, Issue1040) {
+    // Crash when talking to 4-th dark advisor
+    auto screenTape = tapes.screen();
+    test.playTraceFromTestData("issue_1040.mm7", "issue_1040.json");
+    EXPECT_EQ(screenTape, tape(SCREEN_GAME, SCREEN_HOUSE, SCREEN_GAME));
+}
+
+GAME_TEST(Issues, Issue1051) {
+    // Collision code asserts when fighting Magogs in Nighon Tunnels.
+    // Note that the bug only reproduces on high fps, the trace is shot at 15ms per frame.
+    auto frameTimeTape = tapes.config(engine->config->debug.TraceFrameTimeMs);
+    test.playTraceFromTestData("issue_1051.mm7", "issue_1051.json");
+    EXPECT_EQ(frameTimeTape, tape(15)); // Don't redo this at different FPS, the problem won't reproduce.
+}
+
+GAME_TEST(Issues, Issue1068) {
+    // Kills assert if characters don't have learning skill, but party has an npc that gives learning boost.
+    auto expTape = charTapes.experiences();
+    test.playTraceFromTestData("issue_1068.mm7", "issue_1068.json");
+    // party has a scholar +5%
+    EXPECT_EQ(expTape.frontBack(), tape({158039, 156727, 157646, 157417}, {158485, 157173, 158092, 157863}));
+}
+
+GAME_TEST(Issues, Issue1093) {
+    // Town Portal on master can be cast near enemies
+    auto screenTape = tapes.screen();
+    auto manaTape = charTapes.mp(3);
+    auto statusTape = tapes.statusBar();
+    test.playTraceFromTestData("issue_1093.mm7", "issue_1093.json");
+    EXPECT_EQ(screenTape, tape(SCREEN_GAME, SCREEN_SPELL_BOOK, SCREEN_GAME));
+    EXPECT_EQ(manaTape, tape(355, 356)); // +1 mana from mana regen, no mana spent on spells.
+    EXPECT_CONTAINS(statusTape, "Cast Town Portal");
+    EXPECT_CONTAINS(statusTape, "Spell failed");
+}
+
+// 1100
+
+GAME_TEST(Issues, Issue1115) {
+    // Entering Arena on level 21 should not crash the game
+    auto mapTape = tapes.map();
+    auto dialogueTape = tapes.dialogueType();
+    auto levelTape = charTapes.levels();
+    test.playTraceFromTestData("issue_1115.mm7", "issue_1115.json");
+    EXPECT_EQ(mapTape, tape(MAP_HARMONDALE, MAP_ARENA)); // Harmondale -> Arena.
+    EXPECT_CONTAINS(dialogueTape, DIALOGUE_ARENA_SELECT_LORD);
+    EXPECT_EQ(levelTape, tape({21, 21, 21, 21}));
+}
+
+GAME_TEST(Issues, Issue1155) {
+    // Crash when pressing [Game Options] while talking to NPCs
+    auto screenTape = tapes.screen();
+    test.playTraceFromTestData("issue_1155.mm7", "issue_1155.json");
+    EXPECT_MISSES(screenTape, SCREEN_SPELL_BOOK);
+    EXPECT_MISSES(screenTape, SCREEN_REST);
+    EXPECT_MISSES(screenTape, SCREEN_QUICK_REFERENCE);
+    EXPECT_MISSES(screenTape, SCREEN_OPTIONS);
+    EXPECT_MISSES(screenTape, SCREEN_BOOKS);
+    EXPECT_CONTAINS(screenTape, SCREEN_CHARACTERS);
+    EXPECT_CONTAINS(screenTape, SCREEN_BRANCHLESS_NPC_DIALOG);
+}
+
+GAME_TEST(Issues, Issue1164) {
+    // PORTRAIT_NO animation ending abruptly - should show the character moving his/her head to the left,
+    // then to the right.
+    auto expressionTape = tapes.custom([] { return std::pair(pParty->pCharacters[0].portrait, gameTimer->time()); });
+    auto frameTimeTape = tapes.config(engine->config->debug.TraceFrameTimeMs);
+    test.playTraceFromTestData("issue_1164.mm7", "issue_1164.json");
+    EXPECT_EQ(frameTimeTape, tape(15)); // Don't redo at other frame rates.
+
+    auto isNo = [] (const auto &pair) { return pair.first == PORTRAIT_NO; };
+    auto begin = std::find_if(expressionTape.begin(), expressionTape.end(), isNo);
+    auto end = std::find_if_not(begin, expressionTape.end(), isNo);
+    ASSERT_NE(end, expressionTape.end());
+
+    // PORTRAIT_NO should take 144 ticks, minus one frame. This one frame is an implementation artifact,
+    // shouldn't really be there, but for now we test it the way it actually works.
+    auto ticks = end->second - begin->second;
+    Duration frameTicks = Duration::fromRealtimeMilliseconds(15 + (1_ticks).realtimeMilliseconds() - 1 /* Round up! */);
+    EXPECT_GE(ticks, 144_ticks - frameTicks);
+}
+
+GAME_TEST(Issues, Issue1175) {
+    // Enemies not using ranged attacks in turn based mode indoors
+    auto healthTape = tapes.totalHp();
+    auto turnTape = tapes.turnBasedMode();
+    test.playTraceFromTestData("issue_1175.mm7", "issue_1175.json");
+    EXPECT_LT(healthTape.back(), healthTape.front());
+    EXPECT_TRUE(turnTape.back());
+}
+
+GAME_TEST(Issues, Issue1191) {
+    // Warlock's baby dragon added +3 to the elemental magic skills but missed spirit, mind and body.
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+
+    pParty->pCharacters[0].classType = CLASS_WARLOCK;
+    pParty->pCharacters[2].classType = CLASS_WARLOCK;
+
+    // A character without the skill takes the bonus too, so every skill gets a base to keep the expectation exact.
+    for (Character &character : pParty->pCharacters)
+        for (Skill skill : allMagicSkills())
+            character.setSkillValue(skill, CombinedSkillValue::novice(4));
+
+    // Nothing else grants a magic skill bonus here, so the dragon is the only thing that can move these later.
+    for (const Character &character : pParty->pCharacters)
+        for (Skill skill : allMagicSkills())
+            EXPECT_EQ(character.getActualSkillValue(skill).level(), 4) << character.name << " " << static_cast<int>(skill);
+
+    hireBabyDragon();
+
+    for (const Character &character : pParty->pCharacters) {
+        for (Skill skill : allMagicSkills()) {
+            bool hasDragonBonus = character.classType == CLASS_WARLOCK && skill != SKILL_LIGHT && skill != SKILL_DARK;
+            EXPECT_EQ(character.getActualSkillValue(skill).level(), hasDragonBonus ? 7 : 4)
+                << character.name << " " << static_cast<int>(skill);
+        }
+    }
+}
+
+GAME_TEST(Issues, Issue1196) {
+    // Assert fails in Character::playEmotion when character looks down
+    auto expr = tapes.custom([] { return pParty->activeCharacter().portrait; });
+    test.playTraceFromTestData("issue_1196.mm7", "issue_1196.json");
+    EXPECT_MISSES(expr, PORTRAIT_32);
+    EXPECT_CONTAINS(expr, PORTRAIT_LOOK_UP);
+    EXPECT_CONTAINS(expr, PORTRAIT_LOOK_DOWN);
+}
+
+GAME_TEST(Issues, Issue1197) {
+    // Assert on party death
+    auto loc = tapes.map();
+    auto deaths = tapes.deaths();
+    test.playTraceFromTestData("issue_1197.mm7", "issue_1197.json");
+    EXPECT_CONTAINS(loc, MAP_EMERALD_ISLAND); // make it back to emerald
+    EXPECT_EQ(deaths.delta(), 1);
+}
+
+// 1200
+
+GAME_TEST(Issues, Issue1226a) {
+    // Check that food consumed while resting on different tiles is correct.
+    engine->config->debug.NoActors.setValue(true);
+
+    game.startNewGame();
+    pParty->uNumFoodRations = 20;
+    game.restAndHeal();
+    EXPECT_EQ(pParty->uNumFoodRations, 18); // Standing on a bridge => rest should cost 2 food.
+
+    game.teleportTo(MAP_LAND_OF_THE_GIANTS, Vec3f(10000, 4070, 1069), 0);
+    game.restAndHeal();
+    EXPECT_EQ(pOutdoor->pTerrain.tilesetByPos(pParty->pos), TILESET_SNOW);
+    EXPECT_EQ(pParty->uNumFoodRations, 15); // Snow => rest should cost 3 food.
+
+    game.teleportTo(MAP_LAND_OF_THE_GIANTS, Vec3f(11302, 4135, 0), 0);
+    game.restAndHeal();
+    EXPECT_EQ(pOutdoor->pTerrain.tilesetByPos(pParty->pos), TILESET_BADLANDS);
+    EXPECT_EQ(pParty->uNumFoodRations, 11); // Badlands => rest should cost 4 food.
+
+    game.teleportTo(MAP_CASTLE_HARMONDALE, Vec3f(-5100, 2100, 0), 0);
+    game.restAndHeal();
+    EXPECT_EQ(pParty->uNumFoodRations, 9); // Dungeon => rest should cost 2 food.
+
+    game.teleportTo(MAP_HARMONDALE, Vec3f(-18000, 12500, 480), 0);
+    game.restAndHeal();
+    EXPECT_EQ(pOutdoor->pTerrain.tilesetByPos(pParty->pos), TILESET_DIRT);
+    EXPECT_EQ(pParty->uNumFoodRations, 7); // Dirt => rest should cost 2 food.
+
+    game.teleportTo(MAP_HARMONDALE, Vec3f(-16000, 12500, 0), 0);
+    game.restAndHeal();
+    EXPECT_EQ(pOutdoor->pTerrain.tilesetByPos(pParty->pos), TILESET_COBBLE_ROAD);
+    EXPECT_EQ(pParty->uNumFoodRations, 5); // Road => rest should cost 2 food.
+}
+
+GAME_TEST(Issues, Issue1226b) {
+    // Check that baby dragon consumes one additional food even when there are no warlocks in the party.
+    auto foodTape = tapes.food();
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+
+    hireBabyDragon();
+    game.tick(1);
+    game.restAndHeal();
+
+    EXPECT_EQ(pOutdoor->getNumFoodRequiredToRestInCurrentPos(pParty->pos), 2);
+    EXPECT_EQ(foodTape.delta(), -3); // +1 food consumed b/c of the baby dragon.
+}
+
+GAME_TEST(Issues, Issue1226c) {
+    // Check that resting in repaired Castle Harmondale consumes 0 food.
+    auto foodTape = tapes.food();
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+
+    pParty->_questBits[QBIT_HARMONDALE_REBUILT] = true;
+    game.teleportTo(MAP_CASTLE_HARMONDALE, Vec3f(-5100, 2100, 0), 0);
+    game.restAndHeal();
+
+    EXPECT_EQ(foodTape.delta(), 0);
+}
+
+GAME_TEST(Issues, Issue1251a) {
+    // Wands cast their spell at novice skill 8 like in vanilla, whoever holds them. So a fireball wand rolls 8d6 per
+    // charge, and takes 8 to 48 hp off a monster with no fire resistance.
+    test.prepareForNextTest(100, RANDOM_ENGINE_MERSENNE_TWISTER);
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+    prepareForBattleTest();
+
+    Item wand(ITEM_ALACORN_WAND_OF_FIREBALLS);
+    wand.numCharges = wand.maxCharges = 20;
+    pParty->pCharacters[0].inventory.equip(ITEM_SLOT_MAIN_HAND, wand);
+
+    auto hpTape = actorTapes.hp(0);
+    auto chargesTape = tapes.custom([] { return pParty->pCharacters[0].inventory.entry(ITEM_SLOT_MAIN_HAND)->numCharges; });
+    auto fireballsTape = tapes.custom([] {
+        AccessibleVector<std::pair<int, Mastery>> result;
+        for (const SpriteObject &sprite : pSpriteObjects)
+            if (sprite.uObjectDescID != 0 && sprite.uSpellID == SPELL_FIRE_FIREBALL)
+                result.emplace_back(sprite.spell_level, sprite.spell_skill);
+        return result;
+    });
+    game.spawnMonster(pParty->pos + Vec3f(0, 1500, 0), MONSTER_TITAN_C, SPAWN_DUMMY); // No fire resistance, so damage rolls aren't halved. Beefy enough to take all twenty.
+    game.tick(); // Baseline tick records 20 charges.
+
+    for (int i = 0; i < 1000 && pParty->pCharacters[0].inventory.entry(ITEM_SLOT_MAIN_HAND)->numCharges > 0; i++) {
+        game.pressAndReleaseKey(PlatformKey::KEY_A);
+        game.tick();
+    }
+    game.tick(20); // Let the last fireball land.
+    test.stopTaping();
+
+    EXPECT_EQ(chargesTape.frontBack(), tape(20, 0));
+    EXPECT_EQ(fireballsTape.flatten().unique(), tape(std::pair(8, MASTERY_NOVICE)));
+    auto damages = hpTape.reverse().adjacentDeltas().filter(_1 > 0);
+    EXPECT_EQ(damages.size(), 20); // Every charge landed.
+    EXPECT_GE(damages.min(), 8);
+    EXPECT_LE(damages.max(), 48);
+}
+
+GAME_TEST(Issues, Issue1251b) {
+    // A charm wand casts charm at novice mastery, which no character can do since charm is an expert spell. This used
+    // to hit an assert because the charm duration was only known from expert up.
+    test.prepareForNextTest(100, RANDOM_ENGINE_MERSENNE_TWISTER);
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+    prepareForBattleTest();
+
+    Item wand(ITEM_ALACORN_WAND_OF_CHARMS);
+    wand.numCharges = wand.maxCharges = 3;
+    pParty->pCharacters[0].inventory.equip(ITEM_SLOT_MAIN_HAND, wand);
+    for (int i = 0; i < 3; i++)
+        game.spawnMonster(pParty->pos + Vec3f(0, 600 + 300 * i, 0), MONSTER_TITAN_A, SPAWN_DUMMY); // No mind resistance, so charm always lands.
+
+    auto charmedTape = actorTapes.countByBuff(ACTOR_BUFF_CHARM);
+    game.tick(); // The wand targets what's on screen, and the titans get there a frame after spawning.
+    for (int i = 0; i < 200 && pParty->pCharacters[0].inventory.entry(ITEM_SLOT_MAIN_HAND)->numCharges > 0; i++) {
+        game.pressAndReleaseKey(PlatformKey::KEY_A);
+        game.tick();
+    }
+    test.stopTaping();
+
+    EXPECT_EQ(charmedTape, tape(0, 1, 2, 3)); // Each charge charms the closest monster that isn't charmed yet.
+}
+
+GAME_TEST(Issues, Issue1253) {
+    // Right clicking on a hireling asserts if there is no active character
+    auto messageBoxesTape = tapes.messageBoxes();
+    auto messageBoxesBody = tapes.allGUIWindowsText();
+    test.playTraceFromTestData("issue_1253.mm7", "issue_1253.json");
+    // message box text was displayed.
+    auto flatMessageBoxes = messageBoxesTape.flatten();
+    auto flatMessageBoxesBody = messageBoxesBody.flatten();
+    EXPECT_GT(flatMessageBoxes.size(), 0);
+    EXPECT_GT(flatMessageBoxesBody.filter([](const auto& s) { return s.starts_with("Perception skill is increased by"); }).size(), 0);
+    EXPECT_FALSE(pParty->hasActiveCharacter());
+    EXPECT_EQ(current_screen_type, SCREEN_GAME);
+}
+
+GAME_TEST(Issues, Issue1255) {
+    // Cant buy green wand
+    auto wandTape = tapes.hasItem(ITEM_FAIRY_WAND_OF_LASHING);
+    test.playTraceFromTestData("issue_1255.mm7", "issue_1255.json");
+    EXPECT_EQ(wandTape, tape(false, true));
+}
+
+GAME_TEST(Issues, Issue1272) {
+    // Game (but not UI) is frozen after death, until click.
+    auto deathsTape = tapes.deaths();
+    auto screenTape = tapes.screen();
+    auto actorWiggleAfterDeath = tapes.custom([] {
+        if (pParty->uNumDeaths == 0 || current_screen_type != SCREEN_GAME)
+            return 0;
+
+        int result = 0;
+        for (const Actor &actor : pActors)
+            result += static_cast<int>(actor.pos.x);
+        return result;
+    });
+    test.playTraceFromTestData("issue_1272.mm7", "issue_1272.json");
+    EXPECT_EQ(deathsTape.delta(), +1); // Party did die.
+    EXPECT_CONTAINS(screenTape, SCREEN_VIDEO); // Party death video should have played.
+    EXPECT_GT(actorWiggleAfterDeath.size(), 2); // Time did flow after respawn, and actors did move around.
+}
+
+GAME_TEST(Issues, Issue1273) {
+    // Assert when clicking on shop video area
+    auto dialogueTape = tapes.dialogueType();
+    test.playTraceFromTestData("issue_1273.mm7", "issue_1273.json");
+    EXPECT_EQ(dialogueTape, tape(DIALOGUE_NULL, DIALOGUE_MAIN));
+}
+
+GAME_TEST(Issues, Issue1274) {
+    // Right clicking in guild when not member brings up skill tooltips
+    auto screenTape = tapes.screen();
+    auto messageBoxesTape = tapes.messageBoxes();
+    test.playTraceFromTestData("issue_1274.mm7", "issue_1274.json");
+    EXPECT_EQ(screenTape, tape(SCREEN_GAME, SCREEN_HOUSE)); // Entered a house.
+    EXPECT_EQ(messageBoxesTape.size(), 1);
+    EXPECT_TRUE(messageBoxesTape.front().empty()); // No message boxes.
+}
+
+GAME_TEST(Issues, Issue1275) {
+    // Clicking a store button while holding item causes black screen
+    auto heldTape = tapes.custom([] {return pParty->pPickedItem.itemId; });
+    auto dialoTape = tapes.custom([] {if (window_SpeakInHouse != nullptr) return window_SpeakInHouse->currentDialogue(); return DIALOGUE_NULL; });
+    test.playTraceFromTestData("issue_1275.mm7", "issue_1275.json");
+    // make sure item is returned to inventory
+    EXPECT_EQ(heldTape.frontBack(), tape(ITEM_NULL, ITEM_NULL));
+    EXPECT_CONTAINS(heldTape, ITEM_LEATHER_ARMOR);
+    // and we reach sell dialog
+    EXPECT_CONTAINS(dialoTape, DIALOGUE_SHOP_SELL);
+}
+
+GAME_TEST(Issues, Issue1277) {
+    // Crash when press enter on character skills tab
+    test.playTraceFromTestData("issue_1277.mm7", "issue_1277.json");
+    EXPECT_EQ(current_screen_type, SCREEN_CHARACTERS);
+}
+
+GAME_TEST(Issues, Issue1281) {
+    // Assert when drinking from THE WELL in Eofol.
+    auto acTape = charTapes.ac(0);
+    test.playTraceFromTestData("issue_1281.mm7", "issue_1281.json");
+    EXPECT_EQ(acTape.delta(), -50); // We've hit the -50 AC branch in the script that used to trigger the assertion.
+}
+
+GAME_TEST(Issues, Issue1282) {
+    // Picking up an item asserts.
+    auto itemTape = tapes.hasItem(ITEM_LEATHER_ARMOR);
+    auto totalObjectsTape = tapes.mapItemCount();
+    test.playTraceFromTestData("issue_1282.mm7", "issue_1282.json");
+    EXPECT_EQ(itemTape, tape(false, true));
+    EXPECT_EQ(totalObjectsTape.delta(), -1);
+}
+
+GAME_TEST(Issues, Issue1290) {
+    // Can't interact with the Accuracy well in Harmondale with the mouse.
+    auto statusTape = tapes.statusBar();
+    auto accuracyTape = charTapes.stat(0, ATTRIBUTE_ACCURACY);
+    Pid wellFace = Pid::odmFace(97, 10);
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+    game.teleportTo(MAP_HARMONDALE, Vec3f(-8864, 17936, 384), 90, -45); // Look down into the well.
+
+    const BLVFace &well = pOutdoor->face(wellFace);
+    ASSERT_EQ(well.eventId, 228);
+    ASSERT_EQ(pParty->activeCharacterIndex(), 0);
+    ASSERT_FALSE(pParty->pCharacters[0]._characterEventBits[2]); // The well's once-per-character bit.
+    EXPECT_TRUE(well.Clickable());
+
+    Pointi waterPos(240, 130);
+    game.moveMouse(waterPos);
+    game.tick();
+    Vis_PIDAndDepth picked = engine->PickMouseForTargeting();
+    ASSERT_EQ(picked.pid, wellFace);
+    ASSERT_LT(picked.depth, engine->config->gameplay.MouseInteractionDepth.value());
+
+    game.pressAndReleaseButton(BUTTON_LEFT, waterPos);
+    game.tick(3);
+    EXPECT_EQ(accuracyTape.delta(), 2);
+    EXPECT_CONTAINS(statusTape, "+2 Accuracy (Permanent)");
+}
+
+GAME_TEST(Issues, Issue1293) {
+    // Hovering the black bars of a letterboxed window with the spellbook open asserted. The highlight code indexed the
+    // Z-buffer with a mouse position outside the render area.
+    for (int y : {-30, 510}) { // Top bar, bottom bar.
+        SCOPED_TRACE(fmt::format("y={}", y));
+        test.prepareForNextTest();
+        engine->config->debug.NoActors.setValue(true);
+        game.startNewGame();
+        game.resizeWindow(640, 600); // 60 px black bars above and below the 640x480 render area.
+        pParty->setActiveCharacterIndex(3); // The sorcerer, so the spellbook has pages to draw.
+        game.pressAndReleaseKey(PlatformKey::KEY_C);
+        game.tick(2);
+        ASSERT_EQ(current_screen_type, SCREEN_SPELL_BOOK);
+
+        auto texturesTape = tapes.hudTextures();
+        test.startTaping();
+        game.moveMouse(320, y);
+        game.tick(2);
+        test.stopTaping();
+        ASSERT_EQ(mouse->position().y, y); // Not clamped to the render area.
+        EXPECT_EQ(current_screen_type, SCREEN_SPELL_BOOK);
+        EXPECT_CONTAINS(texturesTape.back(), "sbfs03"); // Torch Light's icon, drawn by the highlight code that crashed.
+    }
+}
+
+GAME_TEST(Issues, Issue1294_1389) {
+    // Bow and Blaster recovery times
+    // Character::GetAttackRecoveryTime assert when character is using blaster
+    auto windowTape = tapes.custom([] { return current_character_screen_window; });
+    test.playTraceFromTestData("issue_1294.mm7", "issue_1294.json");
+
+    // Check that we get back to stats screen without asserting
+    EXPECT_CONTAINS(windowTape, WINDOW_CharacterWindow_Inventory);
+    EXPECT_EQ(windowTape.back(), WINDOW_CharacterWindow_Stats);
+    // Check min values are used
+    EXPECT_EQ(pParty->pCharacters[0].GetAttackRecoveryTime(false), Duration::fromTicks(engine->config->gameplay.MinRecoveryBlasters.value()));
+    EXPECT_EQ(pParty->pCharacters[2].GetAttackRecoveryTime(true), Duration::fromTicks(engine->config->gameplay.MinRecoveryRanged.value()));
+}
+
+// 1300
+
+GAME_TEST(Issues, Issue1301a) {
+    // A character incapacitated by a script stayed selected during the movement phase of turn-based mode.
+    for (auto [turnBased, skipIncapacitated] : {std::pair(false, true), std::pair(true, true), std::pair(true, false)}) {
+        SCOPED_TRACE(fmt::format("turnBased={} skipIncapacitated={}", turnBased, skipIncapacitated));
+        test.prepareForNextTest();
+        engine->config->gameplay.TurnBasedFocusSkipsIncapacitated.setValue(skipIncapacitated);
+        engine->config->debug.NoActors.setValue(true);
+        game.startNewGame();
+        engine->config->debug.NoActors.setValue(false);
+        if (turnBased) {
+            game.pressAndReleaseKey(PlatformKey::KEY_RETURN);
+            for (int i = 0; i < 200 && pTurnEngine->turn_stage != TE_MOVEMENT; ++i) {
+                if (pTurnEngine->turn_stage == TE_ATTACK && pParty->hasActiveCharacter() && !pParty->activeCharacter().timeToRecovery)
+                    game.pressAndReleaseKey(PlatformKey::KEY_B); // Pass.
+                game.tick();
+            }
+            ASSERT_EQ(pTurnEngine->turn_stage, TE_MOVEMENT);
+        }
+        ASSERT_EQ(pParty->bTurnBasedModeOn, turnBased);
+        ASSERT_TRUE(pParty->hasActiveCharacter());
+        ASSERT_TRUE(pParty->activeCharacter().CanAct());
+        int activeCharacterIndex = pParty->activeCharacterIndex();
+        Character &character = pParty->activeCharacter();
+
+        auto activeTape = tapes.activeCharacterIndex();
+        test.startTaping();
+        game.tick();
+        character.SetCondition(CONDITION_ERADICATED, 1);
+        game.tick(2);
+        test.stopTaping();
+
+        ASSERT_TRUE(character.conditions.has(CONDITION_ERADICATED));
+        if (turnBased)
+            ASSERT_EQ(pTurnEngine->turn_stage, TE_MOVEMENT);
+        if (!skipIncapacitated)
+            EXPECT_EQ(activeTape, tape(activeCharacterIndex));
+        if (skipIncapacitated && turnBased)
+            EXPECT_EQ(activeTape, tape(activeCharacterIndex, -1)); // Outside the attack stage turn-based mode has no queue head to fall back on, so no one ends up selected.
+        if (skipIncapacitated && !turnBased) {
+            EXPECT_EQ(activeTape, tape(activeCharacterIndex, activeCharacterIndex + 1)); // Realtime mode stops on the first character that can act.
+            EXPECT_TRUE(pParty->activeCharacter().CanAct());
+        }
+    }
+}
+
+GAME_TEST(Issues, Issue1301b) {
+    // Eradicating the party on the first frame of the turn-based attack stage used to crash on an empty turn queue.
+    test.prepareForNextTest();
+    engine->config->debug.NoActors.setValue(true); // A monster would keep the turn queue from ever emptying.
+    game.startNewGame();
+    engine->config->debug.NoActors.setValue(false);
+
+    auto deathsTape = tapes.deaths();
+    test.startTaping();
+    game.pressAndReleaseKey(PlatformKey::KEY_RETURN);
+    for (int i = 0; i < 200 && pTurnEngine->turn_stage != TE_ATTACK; ++i)
+        game.tick();
+    ASSERT_EQ(pTurnEngine->turn_stage, TE_ATTACK);
+    for (Character &character : pParty->pCharacters)
+        character.SetCondition(CONDITION_ERADICATED, 1);
+    game.tick(10);
+    test.stopTaping();
+
+    EXPECT_EQ(deathsTape.delta(), +1);
+    EXPECT_FALSE(pParty->bTurnBasedModeOn);
+    EXPECT_EQ(pParty->canActCount(), 4);
+}
+
+GAME_TEST(Issues, Issue1315) {
+    // Dying in turn-based mode asserts.
+    auto deathsTape = tapes.deaths();
+    auto mapTape = tapes.map();
+    auto stateTape = tapes.custom([] { return std::tuple(pParty->bTurnBasedModeOn, uGameState); });
+    test.playTraceFromTestData("issue_1315.mm7", "issue_1315.json");
+    EXPECT_EQ(deathsTape.delta(), +1);
+    EXPECT_EQ(mapTape, tape(MAP_LAND_OF_THE_GIANTS, MAP_HARMONDALE)); // Land of the Giants -> Harmondale.
+    EXPECT_EQ(stateTape, tape(std::tuple(false, GAME_STATE_PLAYING),
+                              std::tuple(true, GAME_STATE_PLAYING),
+                              std::tuple(false, GAME_STATE_PARTY_DIED), // Instant switch from turn-based & alive into realtime & dead,
+                              std::tuple(false, GAME_STATE_PLAYING)));  // meaning that the party died in turn-based mode.
+}
+
+GAME_TEST(Prs, Pr1325) {
+    // Trolls drop vials of troll blood.
+    auto vialsTape = tapes.mapItemCount(ITEM_REAGENT_VIAL_OF_TROLL_BLOOD);
+    auto deadTape = actorTapes.countByState(AIState::Dead);
+    test.playTraceFromTestData("pr_1325.mm7", "pr_1325.json");
+    EXPECT_GE(vialsTape.delta(), +4); // We got some vials.
+    EXPECT_EQ(deadTape.delta(), +84); // And a lot of dead Trolls.
+}
+
+GAME_TEST(Issues, Issue1331) {
+    // "of David" enchanted bows should do double damage against Titans.
+    test.prepareForNextTest(100, RANDOM_ENGINE_SEQUENTIAL);
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+    prepareForBattleTest();
+
+    // Equip Bow-of-David on char0. Expert bow shoots one arrow per shot. Haste + max speed cut recovery.
+    Character &char0 = pParty->pCharacters[0];
+    Item bow(ITEM_CROSSBOW);
+    bow.specialEnchantment = ITEM_ENCHANTMENT_TITAN_SLAYING;
+    char0.inventory.equip(ITEM_SLOT_BOW, bow);
+    char0.setSkillValue(SKILL_BOW, CombinedSkillValue(15, MASTERY_EXPERT));
+    char0._stats[ATTRIBUTE_SPEED] = 500;
+    pParty->pPartyBuffs[PARTY_BUFF_HASTE].Apply(pParty->GetPlayingTime() + Duration::fromDays(1), MASTERY_GRANDMASTER, 30, 0, 0);
+    EXPECT_EQ(char0.GetRangedDamageString(), "4 - 8");
+
+    // Spawn a stationary titan with no resistances so that damage rolls aren't halved.
+    auto hpTape = actorTapes.hp(0);
+    game.spawnMonster(pParty->pos + Vec3f(0, 1500, 0), MONSTER_TITAN_A, SPAWN_STATIONARY | SPAWN_NO_RESISTANCES);
+
+    for (int i = 0; i < 500; i++) {
+        game.pressAndReleaseKey(PlatformKey::KEY_A);
+        game.tick();
+    }
+    test.stopTaping();
+
+    // Per-shot damage is fully deterministic with sequential RNG + resPhysical=0: crossbow rolls 4d2 (always 6
+    // with sequential rng), doubled by titan-slaying = 12. Expert bow shoots one arrow per shot, so every damage
+    // delta is the same. Without titan-slaying it would be 6.
+    auto damages = hpTape.reverse().adjacentDeltas().filter(_1 > 0);
+    EXPECT_EQ(damages.minMax(), tape(12, 12));
+}
+
+GAME_TEST(Issues, Issue1338) {
+    // Casting telepathy on an actor and then killing it results in the actor not dropping any gold.
+    auto deadTape = actorTapes.indicesByState(AIState::Dead);
+    auto statusTape = tapes.statusBar();
+    auto goldTape = tapes.gold();
+    auto peasantGoldTape = tapes.custom([] { return pActors[18].items[3].goldAmount; });
+    test.playTraceFromTestData("issue_1338.mm7", "issue_1338.json");
+    EXPECT_EQ(deadTape, tape(std::initializer_list<int>{}, {18}, std::initializer_list<int>{})); // Alive -> Dead -> corpse picked up.
+    EXPECT_GT(peasantGoldTape.max(), 0); // Peasant should have had gold generated.
+    EXPECT_EQ(goldTape.delta(), peasantGoldTape.max());
+    EXPECT_CONTAINS(statusTape, fmt::format("{} gold", peasantGoldTape.max())); // Telepathy status message.
+    EXPECT_CONTAINS(statusTape, fmt::format("You found {} gold!", peasantGoldTape.max())); // Corpse pickup message.
+}
+
+GAME_TEST(Issues, Issue1340) {
+    // Gold piles in chests are generated with 0 gold.
+    auto goldTape = tapes.gold();
+    auto mapTape = tapes.map();
+    auto statusTape = tapes.statusBar();
+    auto screenTape = tapes.screen();
+    test.playTraceFromTestData("issue_1340.mm7", "issue_1340.json", [] {
+        // Harmondale should not have been visited - check that the dlv data is the same as what's in games.lod.
+        const Blob &saveHarmondale = pMapDeltas.at("d29.dlv");
+        Blob origHarmondale = pGames_LOD->read("d29.dlv");
+        EXPECT_EQ(saveHarmondale.str(), origHarmondale.str());
+    });
+
+    // Emerald Isle -> Castle Harmondale. Map change is important because we want to trigger map respawn on first visit.
+    EXPECT_EQ(mapTape, tape(MAP_EMERALD_ISLAND, MAP_CASTLE_HARMONDALE));
+    EXPECT_CONTAINS(screenTape, SCREEN_CHEST);
+    EXPECT_GT(goldTape.delta(), 0); // Party should have picked some gold from the chest.
+    EXPECT_MISSES(statusTape, "You found 0 gold!"); // No piles of 0 size.
+    for (int gold : goldTape.adjacentDeltas())
+        EXPECT_CONTAINS(statusTape, fmt::format("You found {} gold!", gold));
+}
+
+GAME_TEST(Issues, Issue1341) {
+    // Can't steal gold from peasants.
+    auto goldTape = tapes.gold();
+    auto statusTape = tapes.statusBar();
+    auto deadTape = actorTapes.countByState(AIState::Dead);
+    test.playTraceFromTestData("issue_1341.mm7", "issue_1341.json");
+    EXPECT_GT(goldTape.delta(), 0); // We did steal some gold.
+    EXPECT_CONTAINS(statusTape, "Roderick failed to steal anything!"); // We have tried many times.
+    EXPECT_CONTAINS(statusTape, fmt::format("Roderick stole {} gold!", goldTape.delta())); // And succeeded.
+    EXPECT_EQ(deadTape, tape(0)); // No one died in the process.
+}
+
+GAME_TEST(Issues, Issue1342) {
+    // Gold piles are generated with 0 gold.
+    auto goldTape = tapes.gold();
+    auto pilesTape = tapes.mapItemCount(ITEM_GOLD_SMALL);
+    auto statusTape = tapes.statusBar();
+    auto mapTape = tapes.map();
+    test.playTraceFromTestData("issue_1342.mm7", "issue_1342.json");
+
+    // Emerald Isle -> Dragon Cave. Map change is important here because we need to trigger map respawn on first visit.
+    EXPECT_EQ(mapTape, tape(MAP_EMERALD_ISLAND, MAP_DRAGONS_LAIR));
+
+    EXPECT_GT(goldTape.delta(), 0); // We picked up some gold.
+    EXPECT_EQ(pilesTape.max() - pilesTape.back(), 3); // Minus three small gold piles.
+    EXPECT_MISSES(statusTape, "You found 0 gold!"); // No piles of 0 size.
+    for (int gold : goldTape.adjacentDeltas())
+        EXPECT_CONTAINS(statusTape, fmt::format("You found {} gold!", gold));
+}
+
+GAME_TEST(Issues, Issue1362) {
+    // HP/SP hint doesn't show when hovering over the SP bar
+    game.startNewGame();
+    game.tick(1);
+    engine->_statusBar->clearEvent();
+
+    game.moveMouse(104, 426);
+    game.tick(1);
+    EXPECT_EQ(engine->_statusBar->get(), "45 / 45 Hit Points    0 / 0 Spell Points");
+    game.moveMouse(219, 426);
+    game.tick(1);
+    EXPECT_EQ(engine->_statusBar->get(), "39 / 39 Hit Points    0 / 0 Spell Points");
+    game.moveMouse(333, 426);
+    game.tick(1);
+    EXPECT_EQ(engine->_statusBar->get(), "35 / 35 Hit Points    22 / 22 Spell Points");
+    game.moveMouse(449, 426);
+    game.tick(1);
+    EXPECT_EQ(engine->_statusBar->get(), "22 / 22 Hit Points    36 / 36 Spell Points");
+}
+
+GAME_TEST(Issues, Issue1364) {
+    // Saving in Arena should display an appropriate status message.
+    auto mapTape = tapes.map();
+    auto statusTape = tapes.statusBar();
+    auto screenTape = tapes.screen();
+    test.playTraceFromTestData("issue_1364.mm7", "issue_1364.json");
+    EXPECT_EQ(mapTape, tape(MAP_HARMONDALE, MAP_ARENA)); // Harmondale -> Arena.
+    EXPECT_CONTAINS(statusTape, "No saving in the Arena"); // Clicking the save button didn't work.
+    EXPECT_CONTAINS(screenTape, SCREEN_HOUSE); // We have visited the stables.
+    EXPECT_CONTAINS(screenTape, SCREEN_MENU); // Opened the game menu while in the Arena.
+    EXPECT_MISSES(screenTape, SCREEN_SAVEGAME); // But save menu didn't open on click.
+}
+
+GAME_TEST(Issues, Issue1368) {
+    // maybeWakeSoloSurvivor() error.
+    test.prepareForNextTest(100, RANDOM_ENGINE_MERSENNE_TWISTER);
+    auto canActTape = tapes.custom([] { return pParty->canActCount(); });
+    auto sleepTape = tapes.custom([] { return pParty->pCharacters[0].conditions.has(CONDITION_SLEEP); });
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+    prepareForBattleTest();
+
+    // Floating eyes cast sleep, spawn some & see what happens.
+    engine->config->debug.NoActors.setValue(false);
+    for (int i = 0; i < 10; i++) {
+        game.spawnMonster(pParty->pos + Vec3f(0, 200, 0) + Vec3f(grng->randomInSegment(-50, 50), grng->randomInSegment(-50, 50), 0), MONSTER_BEHOLDER_A);
+        game.tick();
+    }
+    game.tick(100);
+
+    EXPECT_EQ(canActTape.min(), 0); // No one can act - try waking.
+    EXPECT_CONTAINS(sleepTape, true); // Should've been asleep.
+}
+
+GAME_TEST(Issues, Issue1370) {
+    // PORTRAIT_TALK doesn't work
+    EXPECT_TRUE(fuzzyEquals(2.53f, pAudioPlayer->getSoundLength(SOUND_EndTurnBasedMode), 0.001f));
+    EXPECT_TRUE(fuzzyEquals(2.49f, pAudioPlayer->getSoundLength(static_cast<SoundId>(6480)), 0.001f));
+
+    // Can be any character selected to talk on map change
+    auto someonesTalking = tapes.custom([] { for (const auto& ch : pParty->pCharacters) if (ch.portrait == PORTRAIT_TALK) return true; return false; });
+    auto talkExprTimeTape = tapes.custom([] { for (const auto& ch : pParty->pCharacters) if (ch.portrait == PORTRAIT_TALK) return ch.portraitTimeLength; return Duration(); });
+    test.playTraceFromTestData("issue_1370.mm7", "issue_1370.json", [] { engine->config->settings.VoiceLevel.setValue(1); });
+    EXPECT_CONTAINS(someonesTalking, true);
+    EXPECT_GT(talkExprTimeTape.max(), 128_ticks);  // Check that we have at least a second of speech to cover all
+    EXPECT_EQ(someonesTalking.back(), false);
+}
+
+GAME_TEST(Issues, Issue1371) {
+    // Collisions - Party struggles to climb stairs to quarter deck
+    auto zTape = tapes.custom([] { return pParty->pos.z; });
+    test.playTraceFromTestData("issue_1371.mm7", "issue_1371.json");
+    EXPECT_GT(zTape.max(), 448);
+}
+
+GAME_TEST(Issues, Issue1383) {
+    // Negative buying prices for characters with GM Merchant.
+    uCurrentlyLoadedLevelType = LEVEL_INDOOR;
+    pIndoor->dlv.reputation = 0; // Reputation is used for price calculations.
+
+    Character character;
+    character.pActiveSkills[SKILL_MERCHANT] = CombinedSkillValue(10, MASTERY_GRANDMASTER);
+    Item item;
+    item.itemId = ITEM_SPELLBOOK_ARMAGEDDON;
+    int gmPrice = PriceCalculator::itemBuyingPriceForPlayer(&character, item.GetValue(), 10.0f);
+    EXPECT_EQ(gmPrice, 7500);
+    EXPECT_EQ(item.GetValue(), 7500);
+
+    // Also check prices w/o skill, just in case.
+    character.pActiveSkills[SKILL_MERCHANT] = CombinedSkillValue();
+    int noobPrice = PriceCalculator::itemBuyingPriceForPlayer(&character, item.GetValue(), 10.0f);
+    EXPECT_EQ(noobPrice, 75000);
+
+    // Restore level type.
+    uCurrentlyLoadedLevelType = LEVEL_NULL;
+}
+
+// 1400
+
+GAME_TEST(Issues, Issue1429a) {
+    // Lich regen is broken. Check that having a lich jar regens SP.
+    auto mpTape = charTapes.mp(3);
+    auto hpTape = charTapes.hp(3);
+    auto timeTape = tapes.time();
+    test.playTraceFromTestData("issue_1429a.mm7", "issue_1429a.json", [] {
+        EXPECT_TRUE(characterHasJar(3, 3)); // Has own jar.
+    });
+    EXPECT_GE(timeTape.delta(), Duration::fromHours(3));
+    EXPECT_EQ(mpTape.delta(), +36); // Wait three hours => +36 sp.
+    EXPECT_EQ(hpTape.delta(), 0);
+}
+
+GAME_TEST(Issues, Issue1429b) {
+    // Lich regen is broken. Check that having another char's lich jar doesn't help with regen.
+    auto mpTape = charTapes.mp(3);
+    auto hpTape = charTapes.hp(3);
+    auto timeTape = tapes.time();
+    test.playTraceFromTestData("issue_1429b.mm7", "issue_1429b.json", [] {
+        EXPECT_TRUE(!characterHasJar(3, 3)); // Doesn't have own jar.
+        EXPECT_TRUE(characterHasJar(3, 2)); // Has #2's jar.
+        EXPECT_TRUE(characterHasJar(2, 3)); // #2 has #3's jar.
+    });
+    EXPECT_GE(timeTape.delta(), Duration::fromHours(1));
+    EXPECT_EQ(mpTape.delta(), -24); // Wait an hour => -24 sp.
+    EXPECT_EQ(hpTape.delta(), -24); // Wait an hour => -24 hp.
+}
+
+GAME_TEST(Issues, Issue1429c) {
+    // Lich regen is broken. HP/MP is drained down to half of max HP/MP if the char doesn't have his/her own jar.
+    auto mpTape = charTapes.mp(3);
+    auto hpTape = charTapes.hp(3);
+    auto timeTape = tapes.time();
+    auto jarsTape = tapes.hasItem(ITEM_QUEST_LICH_JAR_FULL);
+    test.playTraceFromTestData("issue_1429c.mm7", "issue_1429c.json");
+    EXPECT_EQ(jarsTape, tape(false)); // No jars.
+    EXPECT_GE(timeTape.delta(), Duration::fromHours(23));
+    EXPECT_EQ(mpTape.front(), pParty->pCharacters[3].GetMaxMana());
+    EXPECT_EQ(mpTape.back(), pParty->pCharacters[3].GetMaxMana() / 2);
+    EXPECT_EQ(hpTape.front(), pParty->pCharacters[3].GetMaxHealth());
+    EXPECT_EQ(hpTape.back(), pParty->pCharacters[3].GetMaxHealth() / 2);
+}
+
+GAME_TEST(Issues, Issue1430) {
+    // Party can't die of exhaustion.
+    // This happened to be a non-issue. Party CAN die of exhaustion, but on 100 realtime seconds per frame party was
+    // slamming into the ground upon respawn at 100g & insta-dying. We just check here that this doesn't happen.
+    test.prepareForNextTest(100000, RANDOM_ENGINE_MERSENNE_TWISTER); // 100 realtime seconds per frame.
+    engine->config->debug.NoActors.setValue(true);
+
+    auto deathsTape = tapes.deaths();
+    auto hpsTape = charTapes.hps();
+    auto statusTape = tapes.statusBar();
+
+    game.startNewGame();
+    test.startTaping();
+    game.tick(300); // 30k realtime seconds, enough for exhaustion death and revival.
+
+    EXPECT_EQ(deathsTape.delta(), 1);
+    EXPECT_EQ(hpsTape.back(), tape(1, 1, 1, 1));
+
+    // We check the string below with starts_with b/c it contains Windows-1252-encoded "..." as last char. Doh.
+    EXPECT_CONTAINS(statusTape, [](std::string_view status) { return status.starts_with("Once again you've cheated death!"); });
+}
+
+GAME_TEST(Prs, Pr1440) {
+    // Frame table search is off by 1 tick.
+    std::vector<TextureFrameData> frames;
+
+    TextureFrameData &frame0 = frames.emplace_back();
+    frame0.textureName = "dec33b";
+    frame0.animationLength = 16_ticks;
+    frame0.frameLength = 8_ticks;
+    frame0.flags = FRAME_HAS_MORE | FRAME_FIRST;
+    GraphicsImage *tex0 = assets->getBitmap(frame0.textureName);
+
+    TextureFrameData &frame1 = frames.emplace_back();
+    frame1.textureName = "dec33d";
+    frame1.animationLength = 0_ticks;
+    frame1.frameLength = 8_ticks;
+    frame1.flags = 0;
+    GraphicsImage *tex1 = assets->getBitmap(frame1.textureName);
+
+    TextureFrameTable table(std::move(frames));
+
+    for (int i = 0; i < 8; i++)
+        EXPECT_EQ(table.animationFrame(0, Duration::fromTicks(i)), tex0) << i;
+    for (int i = 8; i < 16; i++)
+        EXPECT_EQ(table.animationFrame(0, Duration::fromTicks(i)), tex1) << i;
+    for (int i = 16; i < 24; i++)
+        EXPECT_EQ(table.animationFrame(0, Duration::fromTicks(i)), tex0) << i;
+    for (int i = 24; i < 32; i++)
+        EXPECT_EQ(table.animationFrame(0, Duration::fromTicks(i)), tex1) << i;
+}
+
+GAME_TEST(Issues, Issue1447a) {
+    // Fire bolt doesn't emit particles in turn based mode
+    auto particlesTape = tapes.custom([] { return std::ranges::count_if(engine->particle_engine.get()->pParticles,
+                                        [](const Particle &par) { return par.type != ParticleType_Invalid; }); });
+    auto turnBasedTape = tapes.custom([] { return pParty->bTurnBasedModeOn; });
+    test.playTraceFromTestData("issue_1447A.mm7", "issue_1447A.json");
+    EXPECT_EQ(turnBasedTape.back(), true);
+    EXPECT_GT(particlesTape.max(), 10);
+}
+
+GAME_TEST(Issues, Issue1447b) {
+    // Fireball doesn't emit particles in turn based mode
+    auto particlesTape = tapes.custom([] { return std::ranges::count_if(engine->particle_engine.get()->pParticles,
+                                        [](const Particle& par) { return par.type != ParticleType_Invalid; }); });
+    auto turnBasedTape = tapes.custom([] { return pParty->bTurnBasedModeOn; });
+    test.playTraceFromTestData("issue_1447B.mm7", "issue_1447B.json");
+    EXPECT_EQ(turnBasedTape.back(), true);
+    EXPECT_GT(particlesTape.max(), 10);
+}
+
+GAME_TEST(Issues, Issue1447c) {
+    // Acid blast doesn't emit particles in turn based mode
+    auto particlesTape = tapes.custom([] { return std::ranges::count_if(engine->particle_engine.get()->pParticles,
+                                        [](const Particle& par) { return par.type != ParticleType_Invalid; }); });
+    auto turnBasedTape = tapes.custom([] { return pParty->bTurnBasedModeOn; });
+    test.playTraceFromTestData("issue_1447C.mm7", "issue_1447C.json");
+    EXPECT_EQ(turnBasedTape.back(), true);
+    EXPECT_GT(particlesTape.max(), 10);
+}
+
+GAME_TEST(Issues, Issue1449) {
+    // Turn-based overlays are broken. Opening hand isn't animated, hourglass isn't animated.
+    test.prepareForNextTest(20, RANDOM_ENGINE_MERSENNE_TWISTER); // 50fps, so that we see the animations.
+    auto iconsTape = tapes.hudTextures();
+    game.startNewGame();
+    test.startTaping();
+    game.pressAndReleaseKey(PlatformKey::KEY_RETURN); // Enter turn-based mode.
+    game.tick(1000 / 20); // Wait 1s.
+    for (int i = 0; i < 4; i++) {
+        game.pressAndReleaseKey(PlatformKey::KEY_A); // Attack with each char.
+        game.tick();
+    }
+    game.pressKey(PlatformKey::KEY_DOWN); // Walk.
+    game.tick(500 / 20);
+    game.releaseKey(PlatformKey::KEY_DOWN);
+    game.tick(500 / 20); // Wait 0.5s.
+    test.stopTaping();
+
+    // This is a test for the taping framework itself. The first & last elements in a tape recorded from a call observer
+    // shouldn't be empty.
+    EXPECT_FALSE(iconsTape.front().empty());
+    EXPECT_FALSE(iconsTape.back().empty());
+
+    // Then we just check that the necessary animation frames were actually displayed.
+    auto flatIcons = iconsTape.flatten();
+    for (const char *icon : {"ia01-001", "ia01-002", "ia01-003", "ia01-004", "ia01-005", "ia01-006", "ia01-007", "ia01-008", "ia01-009", "ia01-010"})
+        EXPECT_CONTAINS(flatIcons, icon); // Check opening hand animation.
+    for (const char *icon : {"ia01-011", "ia01-012", "ia01-013", "ia01-014"})
+        EXPECT_CONTAINS(flatIcons, icon); // Fingers.
+    for (const char *icon : {"ia02-001", "ia02-002", "ia02-003", "ia02-004", "ia02-005"})
+        EXPECT_CONTAINS(flatIcons, icon); // Hourglass animation is 10 frames long, we only see the first 5 frames.
+}
+
+GAME_TEST(Issues, Issue1454) {
+    // Map hotkey doesn't close the map
+    game.startNewGame();
+    game.tick(1);
+    game.pressAndReleaseKey(PlatformKey::KEY_M);
+    game.tick(1);
+    EXPECT_EQ(current_screen_type, ScreenType::SCREEN_BOOKS);
+    EXPECT_EQ(pGUIWindow_CurrentMenu->eWindowType, WindowType::WINDOW_MapsBook);
+    game.pressAndReleaseKey(PlatformKey::KEY_M);
+    game.tick(1);
+    EXPECT_EQ(current_screen_type, ScreenType::SCREEN_GAME);
+    EXPECT_EQ(pGUIWindow_CurrentMenu, nullptr);
+}
+
+GAME_TEST(Issues, Issue1457) {
+    // Ghost items - able to pick up items across the map
+    auto itemsTape = tapes.totalItemCount();
+    auto mapItemsTape = tapes.mapItemCount();
+    test.playTraceFromTestData("issue_1457.mm7", "issue_1457.json");
+    EXPECT_EQ(itemsTape.size(), 1);
+    EXPECT_EQ(mapItemsTape.size(), 1);
+}
+
+GAME_TEST(Issues, Issue1462) {
+    // Can dark sacrifice the same npc 4 times.
+    auto hirelingsTape = tapes.totalHirelings();
+    auto statusTape = tapes.statusBar();
+    test.playTraceFromTestData("issue_1462.mm7", "issue_1462.json");
+    EXPECT_EQ(hirelingsTape, tape(1, 0)); // We did sacrifice the last one.
+    EXPECT_EQ(statusTape, tape("", "Select Target", "", "Select Target", "Spell failed")); // Sacrifice was cast twice, second cast failed.
+}
+
+GAME_TEST(Issues, Issue1464) {
+    // Can talk to the npc being dark-sacrificed.
+    // Talking to the last NPC while he's being dark-sacrificed asserts.
+    auto screenTape = tapes.screen();
+    auto hirelingsTape = tapes.totalHirelings();
+    test.playTraceFromTestData("issue_1464.mm7", "issue_1464.json");
+    EXPECT_EQ(screenTape, tape(SCREEN_GAME)); // No SCREEN_NPC_DIALOG.
+    EXPECT_EQ(hirelingsTape, tape(1, 0)); // We did sacrifice the last one.
+}
+
+GAME_TEST(Issues, Issue1466) {
+    // Assert in spellbook popups
+    auto messageBoxesTape = tapes.messageBoxes();
+    auto messageBoxesBody = tapes.allGUIWindowsText();
+    test.playTraceFromTestData("issue_1466.mm7", "issue_1466.json");
+    // message box body text was displayed.
+    auto flatMessageBoxes = messageBoxesTape.flatten();
+    auto flatMessageBoxesBody = messageBoxesBody.flatten();
+    EXPECT_GT(flatMessageBoxes.size(), 0);
+    EXPECT_GT(flatMessageBoxesBody.filter([](const auto& s) { return s.starts_with("Inferno burns all"); }).size(), 0);
+    EXPECT_FALSE(pParty->pCharacters[0].HasSkill(SKILL_FIRE));
+    EXPECT_EQ(current_screen_type, SCREEN_GAME);
+}
+
+GAME_TEST(Issues, Issue1467) {
+    // Dark sacrificing an empty npc slot asserts.
+    auto hirelingsTape = tapes.totalHirelings();
+    auto statusTape = tapes.statusBar();
+    test.playTraceFromTestData("issue_1467.mm7", "issue_1467.json");
+    EXPECT_EQ(hirelingsTape, tape(1, 0)); // We did sacrifice the last one.
+    EXPECT_EQ(statusTape, tape("", "Select Target", "", "Select Target", "")); // Sacrifice was cast twice. Also, no "Spell Failed".
+}
+
+GAME_TEST(Issues, Issue1471) {
+    // Waiting until dawn doesn't recharge Armageddon.
+    auto armageddonTape = tapes.custom([] { return pParty->pCharacters[0].uNumArmageddonCasts; });
+    auto timeTape = tapes.time();
+    test.playTraceFromTestData("issue_1471.mm7", "issue_1471.json");
+    EXPECT_EQ(armageddonTape, tape(4, 0, 1)); // blocked/ reset/ cast
+    EXPECT_GT(timeTape.back().toCivilTime().day, timeTape.front().toCivilTime().day); // Time should have passed 3am reset time
+    EXPECT_GT(timeTape.back().toCivilTime().hour, 3);
+}
+
+GAME_TEST(Issues, Issue1473) {
+    // Ethric's Staff drained health from liches and zombies, although its description only promises to drain mortals.
+    auto lichHpTape = charTapes.hp(0);
+    auto zombieHpTape = charTapes.hp(1);
+    auto mortalHpTape = charTapes.hp(2);
+    game.startNewGame();
+
+    Character &lich = pParty->pCharacters[0];
+    Character &zombie = pParty->pCharacters[1];
+    Character &mortal = pParty->pCharacters[2];
+    lich.classType = CLASS_LICH;
+    zombie.conditions.set(CONDITION_ZOMBIE, pParty->GetPlayingTime());
+    for (Character *wielder : {&lich, &zombie, &mortal}) {
+        wielder->inventory.equip(ITEM_SLOT_MAIN_HAND, Item(ITEM_RELIC_ETHRICS_STAFF));
+        wielder->health = wielder->GetMaxHealth() / 2; // Lich and zombie drains stop at half health.
+    }
+
+    test.startTaping();
+    game.tick(100);
+
+    EXPECT_LT(mortalHpTape.delta(), 0); // Zero would mean that no regeneration tick ran.
+    EXPECT_EQ(lichHpTape.delta(), 0);
+    EXPECT_EQ(zombieHpTape.delta(), 0);
+}
+
+GAME_TEST(Issues, Issue1474) {
+    // Wait until dawn ended at 5:02 because every rest frame also added the frame time to the clock.
+    test.prepareForNextTest(100, RANDOM_ENGINE_MERSENNE_TWISTER);
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    auto timeTape = tapes.time();
+    test.startTaping();
+    game.pressAndReleaseKey(PlatformKey::KEY_R);
+    game.tick();
+    ASSERT_EQ(current_screen_type, SCREEN_REST);
+    game.pressGuiButton("Rest_WaitTillDawn");
+    game.tick();
+    ASSERT_EQ(currentRestType, REST_WAIT);
+    for (int i = 0; i < 200 && currentRestType == REST_WAIT; i++)
+        game.tick();
+    ASSERT_EQ(currentRestType, REST_NONE); // The wait finished on its own.
+    game.tick(3); // The rest screen stays open after the wait, the clock must not move.
+
+    EXPECT_EQ(timeTape.back(), Time::fromDays(1) + Duration::fromHours(5)); // A new game starts on day 1 at 9am, so this is day 2 at 5am.
+}
+
+GAME_TEST(Issues, Issue1475) {
+    // Warlock mana regen from Baby Dragon regens mana for dead characters.
+    auto timeTape = tapes.time();
+    auto conditionTape = charTapes.condition(3);
+    auto hpTape = charTapes.hp(3);
+    auto mpTape = charTapes.mp(3);
+    test.playTraceFromTestData("issue_1475.mm7", "issue_1475.json", [] {
+        EXPECT_EQ(pParty->pCharacters[3].classType, CLASS_WARLOCK);
+        EXPECT_TRUE(PartyHasDragon()); // Dragon provides mana regen.
+    });
+    EXPECT_GT(timeTape.delta(), Duration::fromHours(1));
+    EXPECT_EQ(conditionTape, tape(CONDITION_DEAD));
+    EXPECT_EQ(hpTape, tape(-44)); // Very dead.
+    EXPECT_EQ(mpTape, tape(0)); // No mana regen.
+}
+
+GAME_TEST(Issues, Issue1476) {
+    // Fireball self-damage doesn't always work
+    auto hpTape = tapes.totalHp();
+    auto exprTape = tapes.custom([] { return pParty->_delayedReactionSpeech; });
+    test.playTraceFromTestData("issue_1476.mm7", "issue_1476.json");
+    EXPECT_CONTAINS(exprTape, SPEECH_DAMAGED_PARTY);
+    EXPECT_LT(hpTape.back(), hpTape.front());
+}
+
+GAME_TEST(Issues, Issue1478) {
+    // Invalid sprites are used for hireling left/right buttons in pressed state in dark skin.
+    test.loadGameFromTestData("issue_1478.mm7");
+    game.tick();
+    EXPECT_EQ(pParty->alignment, PartyAlignment_Evil);
+    // Check buttons have correct texture set.
+    const auto quickRefButton = std::ranges::find_if(pPrimaryWindow->vButtons, [](const GUIButton* but) { return but->msg == UIMSG_QuickReference; });
+    EXPECT_EQ((*quickRefButton)->vTextures[0]->name(), "ib-m3d-c");
+    const auto npcLeftButton = std::ranges::find_if(pPrimaryWindow->vButtons, [](const GUIButton* but) { return but->msg == UIMSG_ScrollNPCPanel && but->msg_param == 0; });
+    EXPECT_EQ((*npcLeftButton)->vTextures[0]->name(), "ib-npcld-c");
+}
+
+GAME_TEST(Issues, Issue1479) {
+    // Crash when identifying Chaos Hydra with ID Monster skill.
+    auto expressionTape = charTapes.portrait(2);
+    test.playTraceFromTestData("issue_1479.mm7", "issue_1479.json");
+    EXPECT_EQ(pParty->pCharacters[2].getActualSkillValue(SKILL_MONSTER_ID).mastery(), MASTERY_GRANDMASTER);
+    EXPECT_CONTAINS(expressionTape, PORTRAIT_47); // Reaction to strong monster id.
+}
+
+GAME_TEST(Issues, Issue1482) {
+    // Regeneration sets HP to 15.
+    auto regenTape = charTapes.hasBuff(0, CHARACTER_BUFF_REGENERATION);
+    auto hpTape = charTapes.hp(0);
+    auto timeTape = tapes.time();
+    test.playTraceFromTestData("issue_1482.mm7", "issue_1482.json");
+    EXPECT_EQ(regenTape, tape(true));
+    EXPECT_EQ(hpTape.delta(), +50); // +50 hp every 5min from GM regeneration buff.
+    EXPECT_GT(timeTape.delta(), Duration::fromMinutes(5));
+    EXPECT_LT(timeTape.delta(), Duration::fromMinutes(10));
+}
+
+GAME_TEST(Issues, Issue1489) {
+    // Cannot equip amulets or gauntlets
+    auto equipmentId = [] (ItemSlot slot) -> ItemId {
+        InventoryConstEntry item = pParty->pCharacters[0].inventory.entry(slot);
+        return item ? item->itemId : ITEM_NULL;
+    };
+    auto bootTape = tapes.custom([=] { return equipmentId(ITEM_SLOT_BOOTS); });
+    auto helmetTape = tapes.custom([=] { return equipmentId(ITEM_SLOT_HELMET); });
+    auto beltTape = tapes.custom([=] { return equipmentId(ITEM_SLOT_BELT); });
+    auto cloakTape = tapes.custom([=] { return equipmentId(ITEM_SLOT_CLOAK); });
+    auto gauntletTape = tapes.custom([=] { return equipmentId(ITEM_SLOT_GAUNTLETS); });
+    auto amuletTape = tapes.custom([=] { return equipmentId(ITEM_SLOT_AMULET); });
+    test.playTraceFromTestData("issue_1489.mm7", "issue_1489.json");
+
+    for (const auto& character : pParty->pCharacters) {
+        EXPECT_TRUE(character.HasSkill(SKILL_MISC));
+    }
+    // Check items were removed and re-equipped
+    EXPECT_EQ(bootTape.front(), bootTape.back());
+    EXPECT_CONTAINS(bootTape, ITEM_NULL);
+    EXPECT_EQ(helmetTape.front(), helmetTape.back());
+    EXPECT_CONTAINS(helmetTape, ITEM_NULL);
+    EXPECT_EQ(beltTape.front(), beltTape.back());
+    EXPECT_CONTAINS(beltTape, ITEM_NULL);
+    EXPECT_EQ(cloakTape.front(), cloakTape.back());
+    EXPECT_CONTAINS(cloakTape, ITEM_NULL);
+    EXPECT_EQ(gauntletTape.front(), gauntletTape.back());
+    EXPECT_CONTAINS(gauntletTape, ITEM_NULL);
+    EXPECT_EQ(amuletTape.front(), amuletTape.back());
+    EXPECT_CONTAINS(amuletTape, ITEM_NULL);
+}
+
+GAME_TEST(Issues, Issue1497a) {
+    // Shift-clicking an actor with Berserk as the quick spell opened the target picker instead of casting at the
+    // clicked actor. Paralyze shared the code path and had the same bug. The S key keeps opening the picker.
+    for (auto [spell, buff] : {std::pair(SPELL_MIND_BERSERK, ACTOR_BUFF_BERSERK), std::pair(SPELL_LIGHT_PARALYZE, ACTOR_BUFF_PARALYZED)}) {
+        for (bool atActor : {true, false}) {
+            test.prepareForNextTest(100, RANDOM_ENGINE_MERSENNE_TWISTER);
+
+            engine->config->debug.NoActors.setValue(true);
+            engine->config->debug.AllMagic.setValue(true);
+            game.startNewGame();
+            test.startTaping();
+            prepareForBattleTest();
+            engine->config->debug.NoActors.setValue(false);
+
+            game.spawnMonster(pParty->pos + Vec3f(0, 400, 0), MONSTER_GOBLIN_A, SPAWN_DUMMY); // Level 1 with no resistances never resists.
+
+            auto buffTape = actorTapes.hasBuff(0, buff);
+            auto pickerTape = tapes.custom([] { return pGUIWindow_CastTargetedSpell != nullptr; });
+            if (atActor) {
+                game.castQuickSpellAtActor(0, spell, 0);
+            } else {
+                game.pointMouseAtActor(0);
+                game.castQuickSpell(0, spell);
+                game.pressAndReleaseButton(BUTTON_LEFT); // Pick the goblin in the picker.
+            }
+            game.tick(10);
+            test.stopTaping();
+
+            EXPECT_EQ(pickerTape, atActor ? tape(false) : tape(false, true, false)); // Only the S key asks.
+            EXPECT_EQ(buffTape.frontBack(), tape(false, true)); // Spell landed on the goblin.
+        }
+    }
+}
+
+GAME_TEST(Issues, Issue1497b) {
+    // The Arcane Wand of Paralyzing opened the target picker on every shot, unlike every other wand.
+    test.prepareForNextTest(100, RANDOM_ENGINE_MERSENNE_TWISTER);
+
+    engine->config->debug.NoActors.setValue(true);
+    game.startNewGame();
+    test.startTaping();
+    prepareForBattleTest();
+    engine->config->debug.NoActors.setValue(false);
+
+    game.spawnMonster(pParty->pos + Vec3f(0, 400, 0), MONSTER_GOBLIN_A, SPAWN_DUMMY); // Level 1 with no resistances never resists.
+
+    Item wand;
+    wand.itemId = ITEM_ARCANE_WAND_OF_PARALYZING;
+    wand.numCharges = wand.maxCharges = 1;
+    pParty->pCharacters[0].inventory.equip(ITEM_SLOT_MAIN_HAND, wand);
+
+    auto buffTape = actorTapes.hasBuff(0, ACTOR_BUFF_PARALYZED);
+    auto pickerTape = tapes.custom([] { return pGUIWindow_CastTargetedSpell != nullptr; });
+    game.pointMouseAtActor(0);
+    game.pressAndReleaseKey(PlatformKey::KEY_A);
+    game.tick(10);
+    test.stopTaping();
+
+    EXPECT_EQ(pickerTape, tape(false)); // Target picker never opened.
+    EXPECT_EQ(buffTape.frontBack(), tape(false, true)); // The shot paralyzed the goblin under the cursor.
+}

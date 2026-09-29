@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+if (TARGET ztd::text)
+	get_target_property(ZTD_TEXT_INCLUDE_DIRS
+		ztd.text INTERFACE_INCLUDE_DIRECTORIES)
+	set_and_check(ZTD_TEXT_INCLUDE_DIRS "${ZTD_TEXT_INCLUDE_DIRS}")
+	set(ZTD_TEXT_LIBRARIES ztd::text ztd::cuneicode)
+endif()

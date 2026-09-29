@@ -1,0 +1,726 @@
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <tl/generator.hpp>
+
+#include "Engine/Evt/EvtInterpreter.h"
+#include "Engine/Evt/EvtInstruction.h"
+#include "Engine/Evt/Processor.h"
+#include "Engine/Party.h"
+#include "Engine/Graphics/Indoor.h"
+#include "Engine/Graphics/Outdoor.h"
+#include "Engine/Graphics/Weather.h"
+#include "Engine/Objects/Decoration.h"
+#include "Engine/Objects/SpriteObject.h"
+#include "Engine/Objects/Chest.h"
+#include "Engine/Objects/Actor.h"
+#include "Engine/PartyPlacement.h"
+#include "Engine/Random/Random.h"
+#include "Engine/Tables/HouseTable.h"
+#include "Engine/Objects/Mm8Ids.h"
+#include "Engine/Tables/ItemTable.h"
+#include "Engine/Spells/Spells.h"
+#include "Engine/Engine.h"
+#include "Engine/Tables/MapTable.h"
+
+#include "Media/Audio/AudioPlayer.h"
+#include "Media/MediaPlayer.h"
+
+#include "Utility/GameVariant.h"
+#include "Utility/Math/TrigLut.h"
+#include "Utility/String/Transformations.h"
+
+#include "GUI/GUIProgressBar.h"
+#include "GUI/GUIMessageQueue.h"
+#include "GUI/UI/UIHouses.h"
+#include "GUI/UI/UIDialogue.h"
+#include "GUI/UI/UIBranchlessDialogue.h"
+#include "GUI/UI/UITransition.h"
+#include "GUI/UI/UIStatusBar.h"
+
+/**
+ * @offset 0x4465DF
+ */
+static bool checkSeason(Season season) {
+    int monthPlusOne = pParty->uCurrentMonth + 1;
+    int daysPlusOne = pParty->uCurrentDayOfMonth + 1;
+
+    switch (season) {
+        case SEASON_WINTER:  // winter 12.21 -> 3.20
+            return (monthPlusOne == 12 && daysPlusOne >= 21 ||
+                    monthPlusOne == 1 || monthPlusOne == 2 ||
+                    monthPlusOne == 3 && daysPlusOne <= 20);
+
+        case SEASON_AUTUMN:  // autumn/fall 9.21 -> 12.20
+            return (monthPlusOne == 9 && daysPlusOne >= 21 ||
+                    monthPlusOne == 10 || monthPlusOne == 11 ||
+                    monthPlusOne == 12 && daysPlusOne <= 20);
+
+        case SEASON_SUMMER:  // summer 6.21 -> 9.20
+            return (monthPlusOne == 6 && daysPlusOne >= 21 ||
+                    monthPlusOne == 7 || monthPlusOne == 8 ||
+                    monthPlusOne == 9 && daysPlusOne <= 20);
+
+        case SEASON_SPRING:  // spring 3.21 -> 6.20
+            return (monthPlusOne == 3 && daysPlusOne >= 21 ||
+                    monthPlusOne == 4 || monthPlusOne == 5 ||
+                    monthPlusOne == 6 && daysPlusOne <= 20);
+
+        default:
+            assert(false);
+            return false;
+    }
+}
+
+/**
+ * @offset 0x448CF4
+ */
+void spawnMonsters(int16_t typeindex, int16_t level, int count,
+                          Vec3f pos, int group, int uUniqueName) {
+    if (engine->_currentLoadedMapId == MAP_INVALID || engine->config->debug.NoActors.value())
+        return;
+
+    SpawnPoint pSpawnPoint;
+
+    pSpawnPoint.position = pos;
+    pSpawnPoint.group = group;
+    pSpawnPoint.radius = 32;
+    pSpawnPoint.type = OBJECT_Actor;
+    pSpawnPoint.monsterIndex = typeindex + 2 * level + level;
+
+    AIDirection direction;
+    int oldNumActors = pActors.size();
+    SpawnEncounter(&pMapTable->pInfos[engine->_currentLoadedMapId], &pSpawnPoint, 0, count, 0);
+    Actor::GetDirectionInfo(pos, pParty->pos + Vec3f(0, 0, pParty->eyeLevel), &direction);
+    for (int i = oldNumActors; i < pActors.size(); ++i) {
+        pActors[i].PrepareSprites(0);
+        pActors[i].yawAngle = direction.uYawAngle;
+        pActors[i].uniqueNameIndex = uUniqueName;
+    }
+}
+
+static tl::generator<Character &> iterateCharacters(EvtTargetCharacter who, RandomEngine *rng) {
+    if ((who >= CHOOSE_PLAYER1 && who <= CHOOSE_PLAYER4) || who == CHOOSE_PLAYER5) {
+        int index = who == CHOOSE_PLAYER5 ? 4 : std::to_underlying(who);
+        if (index < pParty->pCharacters.size()) // MM8 scripts can name a slot that has no character.
+            co_yield pParty->pCharacters[index];
+    } else if (who == CHOOSE_ACTIVE) {
+        if (pParty->hasActiveCharacter())
+            co_yield pParty->activeCharacter();
+    } else if (who == CHOOSE_PARTY) {
+        for (Character &player : pParty->pCharacters)
+            co_yield player;
+    } else {
+        assert(who == CHOOSE_RANDOM);
+        co_yield pParty->pCharacters[rng->random(pParty->pCharacters.size())];
+    }
+}
+
+/**
+ * @param ir                            MoveToMap instruction.
+ * @return                              Where it sends the party. An all-zero position means the script isn't placing
+ *                                      the party itself - on the current map it stays put, which is how the MM6
+ *                                      castle doors open their throne rooms without a teleport, and on another map
+ *                                      it arrives at Party Start. Yaw, pitch and speed are ignored in that case, and
+ *                                      every shipped record with a zero position has them at zero anyway.
+ */
+static MapDestination moveToMapDestination(const EvtInstruction &ir) {
+    const auto &descr = ir.data.move_map_descr;
+
+    MapId map = !ir.str.starts_with('0') && !ir.str.empty() ? pMapTable->GetMapInfo(ir.str) : MAP_INVALID;
+    if (descr.x || descr.y || descr.z)
+        return MapDestination(map, PartyPlacement(Vec3f(descr.x, descr.y, descr.z),
+                                                  descr.yaw != -1 ? (descr.yaw & TrigLUT.uDoublePiMask) : -1, descr.pitch, descr.zspeed));
+    if (map != MAP_INVALID)
+        return MapDestination(map, MAP_START_POINT_PARTY); // Shipped MM6 doors name the map and nothing else.
+    return {};
+}
+
+int EvtInterpreter::executeOneEvent(int step, bool isNpc) {
+    EvtInstruction ir;
+    bool stepFound = false;
+
+    for (const EvtInstruction &irTmp : _events) {
+        if (irTmp.step == step) {
+            ir = irTmp;
+            stepFound = true;
+            break;
+        }
+    }
+
+    if (!stepFound) {
+        return -1;
+    }
+
+    // In NPC mode must process only NPC dialogue related events plus Exit
+    if (isNpc) {
+        switch (ir.opcode) {
+            case EVENT_Exit:
+                return -1;
+            case EVENT_OnCanShowDialogItemCmp:
+                _readyToExit = true;
+                for (Character &player : pParty->pCharacters) {
+                    if (player.CompareVariable(ir.data.variable_descr.type, ir.data.variable_descr.value)) {
+                        return ir.target_step;
+                    }
+                }
+                break;
+            case EVENT_EndCanShowDialogItem:
+                return -1;
+            case EVENT_SetCanShowDialogItem:
+                _readyToExit = true;
+                _canShowOption = ir.data.can_show_npc_dialogue;
+                break;
+            case EVENT_CanShowTopic_IsActorKilled:
+                // TODO: enconunter and process
+                assert(false);
+#if 0
+                if (Actor::isActorKilled(ir.data.actor_descr.policy, ir.data.actor_descr.param, ir.data.actor_descr.num, ir.data.actor_descr.countDisabled)) {
+                    return ir.target_step;
+                }
+#endif
+                break;
+            default:
+                break;
+        }
+        return step + 1;
+    }
+
+    switch (ir.opcode) {
+        case EVENT_Exit:
+            return -1;
+        case EVENT_SpeakInHouse:
+            if (enterHouse(ir.data.house_id)) {
+                pAudioPlayer->playHouseSound(SOUND_enter, false);
+                HouseId houseId = isMm6() ? static_cast<HouseId>(167) : HOUSE_JAIL; // MM6 jail is house 167.
+                if (uCurrentHouse_Animation != houseTable[houseId].uAnimationID) {
+                    houseId = ir.data.house_id;
+                }
+                createHouseUI(houseId);
+            }
+            break;
+        case EVENT_PlaySound:
+            // TODO(captainurist): ir.data.sound_descr.x, ir.data.sound_descr.y used to be passed in.
+            pAudioPlayer->playDataSound(ir.data.sound_descr.sound_id, SOUND_MODE_UI);
+            break;
+        case EVENT_MouseOver:
+        case EVENT_LocationName:
+            assert(false); // EvtInstruction::parse gives hints step -1, so the lookup by step above never returns one.
+            break;
+        case EVENT_MoveToMap:
+        {
+            if (ir.data.move_map_descr.house_id != HOUSE_INVALID || ir.data.move_map_descr.exit_pic_id) {
+                // TODO(pskelton): Fix #1890 this should be a data mod
+                if (engine->_indoor->filename == "d20.blv" && _eventId == 501)
+                    ir.data.move_map_descr.z = 3088;
+
+                pDialogueWindow = std::make_unique<GUIWindow_IndoorEntryExit>(ir.data.move_map_descr.house_id, ir.data.move_map_descr.exit_pic_id,
+                                                                             moveToMapDestination(ir), ir.str);
+                savedEventID = _eventId;
+                savedEventStep = step + 1;
+                return -1;
+            }
+
+            // TODO(pskelton): Fix #2117 this should be a data mod
+            if (engine->_indoor->filename == "d25.blv" && _eventId == 451 && ir.step == 1)
+                ir.str = "out06.odm";
+
+            // TODO(pskelton): Fix #2117 this should be a data mod - the RandomGoTo targets fall through into each
+            //                 other, only the first one should run.
+            if (engine->_indoor->filename == "d25.blv" && _eventId == 451 && engine->_pendingTransition)
+                break;
+
+            MapDestination destination = moveToMapDestination(ir);
+            if (destination.map() == MAP_INVALID) { // teleport within map
+                if (std::optional<PartyPlacement> placement = destination.resolvePlacement()) {
+                    placeParty(*placement);
+                    pAudioPlayer->playUISound(SOUND_teleport);
+                }
+            } else {
+                pGameLoadingUI_ProgressBar->Initialize((GUIProgressBar::Type)((activeLevelDecoration == NULL) + 1));
+                startMapTransition(destination);
+                _mapExitTriggered = true;
+                if (current_screen_type == SCREEN_HOUSE) {
+                    if (uGameState == GAME_STATE_CHANGE_LOCATION) {
+                        while (houseDialogPressEscape()) {}
+                        pMediaPlayer->Unload();
+                        window_SpeakInHouse = nullptr;
+                        engine->_messageQueue->clear();
+                        current_screen_type = SCREEN_GAME;
+                        pDialogueWindow = nullptr;
+                    }
+                    return -1;
+                }
+            }
+            break;
+        }
+        case EVENT_OpenChest:
+            if (!Chest::open(ir.data.chest_id, _objectPid)) {
+                return -1;
+            }
+            break;
+        case EVENT_ShowFace:
+            for (Character &character : iterateCharacters(ir.who, vrng))
+                character.playEmotion(ir.data.portrait_id, 0_ticks);
+            break;
+        case EVENT_ReceiveDamage:
+            for (Character &character : iterateCharacters(ir.who, grng))
+                character.receiveDamage(ir.data.damage_descr.damage, ir.data.damage_descr.damage_type);
+            break;
+        case EVENT_SetSnow:
+            if (!ir.data.snow_descr.is_nop) {
+                pWeather->bRenderSnow = ir.data.snow_descr.is_enable;
+            }
+            break;
+        case EVENT_SetTexture:
+            setTexture(ir.data.sprite_texture_descr.cog, ir.str);
+            break;
+        case EVENT_ShowMovie:
+        {
+            std::string movieName = trimRemoveQuotes(ir.str);
+            if (movieName.length() == 0) {
+                break;
+            }
+            if (pMediaPlayer->IsMoviePlaying()) {
+                pMediaPlayer->Unload();
+            }
+
+            // Restore the screen type after the movie has played in case we are already in a house
+            auto saveScreenType = current_screen_type;
+            pMediaPlayer->PlayFullscreenMovie(movieName);
+            current_screen_type = saveScreenType;
+
+            if (!movieName.compare("arbiter good")) { // change alignment to good
+                pParty->alignment = PartyAlignment::PartyAlignment_Good;
+                SetUserInterface(pParty->alignment);
+            } else if (!movieName.compare("arbiter evil")) { // change alignment to evil
+                pParty->alignment = PartyAlignment::PartyAlignment_Evil;
+                SetUserInterface(pParty->alignment);
+            } else if (!movieName.compare("pcout01")) { // moving to harmondale from emerald isle
+                Rest(Duration::fromDays(7));
+                pParty->restAndHeal();
+                pParty->days_played_without_rest = 0;
+            }
+
+            // is this block is needed anymore?
+            if (!ir.data.movie_unknown_field || current_screen_type == SCREEN_BOOKS) {
+                if (current_screen_type == SCREEN_BOOKS) {
+                    pGameLoadingUI_ProgressBar->Initialize(GUIProgressBar::TYPE_Fullscreen);
+                }
+
+                if (current_screen_type == SCREEN_HOUSE) {
+                    pMediaPlayer->OpenHouseMovie(pAnimatedRooms[uCurrentHouse_Animation].video_name, 1);
+                }
+            }
+            break;
+        }
+        case EVENT_SetSprite:
+            setDecorationSprite(ir.data.sprite_texture_descr.cog, ir.data.sprite_texture_descr.hide, ir.str);
+            break;
+        case EVENT_Compare:
+            for (Character &character : iterateCharacters(_who, grng))
+                if (character.CompareVariable(ir.data.variable_descr.type, ir.data.variable_descr.value))
+                    return ir.target_step;
+            break;
+        case EVENT_ChangeDoorState:
+            switchDoorAnimation(ir.data.door_descr.door_id, ir.data.door_descr.door_action);
+            break;
+        case EVENT_Add:
+            // TODO(captainurist): move this workaround into patched event data, and add the OnMapReload step from
+            //                     GrayFace's d27.evt that re-applies the empty cage sprite once the quest bit is set.
+            //                     The sprite isn't saved, so after a reload the cage shows Roland until the next click.
+            if (engine->_currentLoadedMapId == MAP_COLONY_ZOD && _eventId == 376 &&
+                ir.data.variable_descr.type == VAR_PlayerItemInHands && pParty->_questBits[QBIT_TALKED_TO_ROLAND])
+                break; // Roland's cage script adds the key on every click, it never checks the quest bit.
+            for (Character &character : iterateCharacters(_who, grng))
+                character.AddVariable(ir.data.variable_descr.type, ir.data.variable_descr.value);
+            break;
+        case EVENT_Subtract:
+            // We had a couple issues with quest items not being removed from inventory, and the reason was that the
+            // character target wasn't properly set in the script. Thus, we don't even check `_who` here and just try
+            // to take the item from all characters. See issues #1808 and #1912.
+            if (ir.data.variable_descr.type == VAR_PlayerItemInHands/* && (_who == CHOOSE_PARTY || _who == CHOOSE_ACTIVE)*/) {
+                ItemId itemId = static_cast<ItemId>(ir.data.variable_descr.value);
+                for (Character &character : pParty->pCharacters) {
+                    if (pParty->pPickedItem.itemId == itemId || character.inventory.find(itemId)) {
+                        if (!character.SubtractVariable(ir.data.variable_descr.type, ir.data.variable_descr.value))
+                            _cancelled = true;
+                        break;  // Only take one item.
+                    }
+                }
+            } else {
+                for (Character &character : iterateCharacters(_who, grng))
+                    if (!character.SubtractVariable(ir.data.variable_descr.type, ir.data.variable_descr.value))
+                        _cancelled = true;
+            }
+            break;
+        case EVENT_Set:
+            for (Character &character : iterateCharacters(_who, grng))
+                character.SetVariable(ir.data.variable_descr.type, ir.data.variable_descr.value);
+            break;
+        case EVENT_SummonMonsters:
+            spawnMonsters(ir.data.monster_descr.type, ir.data.monster_descr.level, ir.data.monster_descr.count,
+                          Vec3f(ir.data.monster_descr.x, ir.data.monster_descr.y, ir.data.monster_descr.z),
+                          ir.data.monster_descr.group, ir.data.monster_descr.name_id);
+            break;
+        case EVENT_CastSpell:
+            eventCastSpell(ir.data.spell_descr.spell_id, ir.data.spell_descr.spell_mastery, ir.data.spell_descr.spell_level,
+                         Vec3f(ir.data.spell_descr.fromx, ir.data.spell_descr.fromy, ir.data.spell_descr.fromz),
+                         Vec3f(ir.data.spell_descr.tox, ir.data.spell_descr.toy, ir.data.spell_descr.toz));
+            break;
+        case EVENT_SpeakNPC:
+            if (_canShowMessages) {
+                // TODO(pskeltonm): Fix #2223 stop tutorial message spam - should be data mod
+                if (engine->_currentLoadedMapId == MAP_EMERALD_ISLAND && _eventId >= 200 && _eventId <= 218) {
+                    if (engine->_OE_transientVariables[_eventId - 200]) {
+                        break;
+                    }
+                    engine->_OE_transientVariables[_eventId - 200] = 1;
+                }
+
+                initializeNPCDialogue(ir.data.npc_descr.npc_id, false);
+            } else {
+                bDialogueUI_InitializeActor_NPC_ID = ir.data.npc_descr.npc_id;
+            }
+            break;
+        case EVENT_SetFacesBit:
+            setFacesBit(ir.data.faces_bit_descr.cog, ir.data.faces_bit_descr.face_bit, ir.data.faces_bit_descr.is_on);
+            break;
+        case EVENT_ToggleActorFlag:
+            Actor::toggleFlag(ir.data.actor_flag_descr.id, ir.data.actor_flag_descr.attr, ir.data.actor_flag_descr.is_set);
+            break;
+        case EVENT_RandomGoTo:
+            return ir.data.random_goto_descr.random_goto[grng->random(ir.data.random_goto_descr.random_goto_len)];
+        case EVENT_InputString: {
+            auto levelString = [](int id) {
+                return id < engine->_levelStrings.size() ? engine->_levelStrings[id] : std::string();
+            };
+            startQuestionDialogue(_eventId, step + 1, ir.target_step, levelString(ir.data.question_descr.text_id),
+                                  {levelString(ir.data.question_descr.answer1_id), levelString(ir.data.question_descr.answer2_id)});
+            return -1;
+        }
+        case EVENT_StatusText:
+            if (activeLevelDecoration) {
+                if (activeLevelDecoration == (LevelDecoration *)1) {
+                    current_npc_text = pNPCTopics[ir.data.text_id - 1].pText;
+                }
+                if (_canShowMessages) {
+                    engine->_statusBar->setEvent(pNPCTopics[ir.data.text_id - 1].pText);
+                }
+            } else {
+                if (_canShowMessages) {
+                    engine->_statusBar->setEvent((ir.data.text_id < engine->_levelStrings.size()) ? engine->_levelStrings[ir.data.text_id] : "");
+                }
+            }
+            break;
+        case EVENT_ShowMessage:
+            branchless_dialogue_str.clear();
+            if (activeLevelDecoration) {
+                current_npc_text = pNPCTopics[ir.data.text_id - 1].pText;
+            } else if (ir.data.text_id < engine->_levelStrings.size()) {
+                branchless_dialogue_str = engine->_levelStrings[ir.data.text_id];
+            }
+            break;
+        case EVENT_OnTimer:
+            // Trigger, must be skipped but can be encountered in vanilla
+            return -1;
+        case EVENT_ToggleIndoorLight:
+            pIndoor->toggleLight(ir.data.light_descr.light_id, ir.data.light_descr.is_enable);
+            break;
+        case EVENT_PressAnyKey:
+            startBranchlessDialogue(_eventId, step + 1, EVENT_PressAnyKey);
+            return -1;
+        case EVENT_SummonItem:
+            if (isMm8()) {
+                // MM8.exe 0x445328, an id over 1000 gives the item id % 1000 with the enchantment of a random item of
+                // the same kind and treasure level id / 1000.
+                int mm8Item = ir.data.summon_item_descr.mm8_item;
+                Item item;
+                ItemId itemId = itemIdFromMm8(mm8Item % 1000);
+                if (mm8Item > 1000 && itemId != ITEM_NULL) {
+                    ItemTreasureLevel level = static_cast<ItemTreasureLevel>(std::clamp(mm8Item / 1000, 1, 6));
+                    pItemTable->generateItem(level, static_cast<RandomItemType>(std::to_underlying(pItemTable->items[itemId].type) + 1), &item);
+                }
+                item.itemId = itemId;
+                item.flags |= ITEM_IDENTIFIED;
+                SpriteObject::dropItemAt(pItemTable->items[item.itemId].spriteId, Vec3f(ir.data.summon_item_descr.x, ir.data.summon_item_descr.y, ir.data.summon_item_descr.z),
+                                         ir.data.summon_item_descr.speed, ir.data.summon_item_descr.count, ir.data.summon_item_descr.random_rotate,
+                                         SPRITE_IGNORE_RANGE, &item);
+                break;
+            }
+            SpriteObject::dropItemAt(ir.data.summon_item_descr.sprite, Vec3f(ir.data.summon_item_descr.x, ir.data.summon_item_descr.y, ir.data.summon_item_descr.z),
+                                     ir.data.summon_item_descr.speed, ir.data.summon_item_descr.count, ir.data.summon_item_descr.random_rotate);
+            break;
+        case EVENT_ForPartyMember:
+            _who = ir.who;
+            break;
+        case EVENT_Jmp:
+            return ir.target_step;
+        case EVENT_OnMapReload:
+            // Trigger, must be skipped but can be encountered in vanilla
+            return -1;
+        case EVENT_OnLongTimer:
+            // Trigger, must be skipped but can be encountered in vanilla
+            return -1;
+        case EVENT_SetNPCTopic:
+        {
+            NPCData *npc = &pNPCStats->pNPCData[ir.data.npc_topic_descr.npc_id];
+            if (ir.data.npc_topic_descr.index == 0) npc->dialogue_1_evt_id = ir.data.npc_topic_descr.event_id;
+            if (ir.data.npc_topic_descr.index == 1) npc->dialogue_2_evt_id = ir.data.npc_topic_descr.event_id;
+            if (ir.data.npc_topic_descr.index == 2) npc->dialogue_3_evt_id = ir.data.npc_topic_descr.event_id;
+            if (ir.data.npc_topic_descr.index == 3) npc->dialogue_4_evt_id = ir.data.npc_topic_descr.event_id;
+            if (ir.data.npc_topic_descr.index == 4) npc->dialogue_5_evt_id = ir.data.npc_topic_descr.event_id;
+            if (ir.data.npc_topic_descr.index == 5) npc->dialogue_6_evt_id = ir.data.npc_topic_descr.event_id;
+            if (ir.data.npc_topic_descr.npc_id == 8) {
+                if (ir.data.npc_topic_descr.event_id == 78) {
+                    houseDialogPressEscape();
+                    window_SpeakInHouse = nullptr;
+                    if (enterHouse(HOUSE_DARK_GUILD_PIT)) {
+                        createHouseUI(HOUSE_DARK_GUILD_PIT);
+                        current_npc_text = pNPCTopics[90].pText;
+                    }
+                }
+            }
+            break;
+        }
+        case EVENT_MoveNPC:
+            pNPCStats->pNPCData[ir.data.npc_move_descr.npc_id].house = ir.data.npc_move_descr.location_id;
+            // TODO(Nik-RE-dev): Looks like it's artifact of MM6
+#if 0
+            if (window_SpeakInHouse) {
+                if (window_SpeakInHouse->houseId() == HOUSE_BODY_GUILD_MASTER_ERATHIA) {
+                    houseDialogPressEscape();
+                    pMediaPlayer->Unload();
+                    window_SpeakInHouse->Release();
+                    activeLevelDecoration = (LevelDecoration *)1;
+                    if (enterHouse(HOUSE_BODY_GUILD_MASTER_ERATHIA)) {
+                        pAudioPlayer->playUISound(SOUND_Invalid);
+                        window_SpeakInHouse = new GUIWindow_House({0, 0}, render->GetRenderDimensions(), HOUSE_BODY_GUILD_MASTER_ERATHIA, "");
+                        window_SpeakInHouse->DeleteButtons();
+                    }
+                }
+            }
+#endif
+            break;
+        case EVENT_GiveItem:
+        {
+            Item item;
+            item.Reset();
+            pItemTable->generateItem(ir.data.give_item_descr.treasure_level, ir.data.give_item_descr.treasure_type, &item);
+            if (ir.data.give_item_descr.item_id != ITEM_NULL) {
+                item.itemId = ir.data.give_item_descr.item_id;
+            }
+            pParty->setHoldingItem(item);
+            break;
+        }
+        case EVENT_ChangeEvent:
+            // The operand is the absolute id of the global event to run on the next click, and the byte in decorVars
+            // stores it as a state, see decorationStateForGlobalEvent. MM6 and MM7 store it relative to the dispatch
+            // base of 380, which works for ids in [380, 635], and every non-zero operand in both games' evt files is
+            // in [383, 443]. MM8 global.evt uses ids 268-289 and 531-570, which MM8.exe 0x44F5B6 maps piecewise.
+            if (ir.data.event_id) {
+                engine->_persistentVariables.decorVars[activeLevelDecoration->eventVarId] = decorationStateForGlobalEvent(ir.data.event_id);
+            } else {
+                engine->_persistentVariables.decorVars[activeLevelDecoration->eventVarId] = 0;
+                activeLevelDecoration->uFlags |= LEVEL_DECORATION_INVISIBLE;
+            }
+            break;
+        case EVENT_CheckSkill:
+            assert(_who != CHOOSE_PARTY); // TODO(Nik-RE-dev): original code for this option is dubious
+            for (Character &character : iterateCharacters(_who, grng)) {
+                CombinedSkillValue val = character.getSkillValue(ir.data.check_skill_descr.skill_type);
+                if (val.level() >= ir.data.check_skill_descr.skill_level && val.mastery() == ir.data.check_skill_descr.skill_mastery)
+                    return ir.target_step;
+            }
+            break;
+        case EVENT_SetNPCGroupNews:
+            pNPCStats->pGroups[ir.data.npc_groups_descr.groups_id] = ir.data.npc_groups_descr.group;
+            break;
+        case EVENT_SetActorGroup:
+            // TODO: enconunter and process
+            assert(false);
+#if 0
+            *(&pActors[0].uGroup + 0x11000000 * _evt->v8 +
+              209 * (_evt->v5 +
+                     ((_evt->v6 + ((unsigned)_evt->v7 << 8)) << 8))) =
+                EVT_DWORD(_evt->v9);
+#endif
+            break;
+        case EVENT_NPCSetItem:
+            npcSetItem(ir.data.npc_item_descr.id, ir.data.npc_item_descr.item, ir.data.npc_item_descr.is_give);
+            break;
+        case EVENT_SetNPCGreeting:
+            pNPCStats->pNPCData[ir.data.npc_descr.npc_id].flags &= ~NPC_GREETED_FIRST;
+            pNPCStats->pNPCData[ir.data.npc_descr.npc_id].flags &= ~NPC_GREETED_SECOND;
+            pNPCStats->pNPCData[ir.data.npc_descr.npc_id].greetingIndex = ir.data.npc_descr.greeting;
+            break;
+        case EVENT_IsActorKilled:
+            if (Actor::isActorKilled(ir.data.actor_descr.policy, ir.data.actor_descr.param, ir.data.actor_descr.num, ir.data.actor_descr.countDisabled)) {
+                return ir.target_step;
+            }
+            break;
+        case EVENT_OnMapLeave:
+            // Trigger, must be skipped but can be encountered in vanilla
+            return -1;
+        case EVENT_ChangeGroup:
+            // TODO: enconunter and process
+            assert(false);
+#if 0
+            v38 = EVT_DWORD(_evt->v5);
+            v39 = EVT_DWORD(_evt->v9);
+            for (unsigned actor_id = 0; actor_id < pActors.size(); actor_id++) {
+                if (pActors[actor_id].uGroup == v38)
+                    pActors[actor_id].uGroup = v39;
+            }
+#endif
+            break;
+        case EVENT_ChangeGroupAlly:
+            // TODO: enconunter and process
+            assert(false);
+#if 0
+            v42 = EVT_DWORD(_evt->v5);
+            v43 = EVT_DWORD(_evt->v9);
+            for (unsigned actor_id = 0; actor_id < pActors.size(); actor_id++) {
+                if (pActors[actor_id].uGroup == v42)
+                    pActors[actor_id].uAlly = v43;
+            }
+#endif
+            break;
+        case EVENT_CheckSeason:
+            if (checkSeason(ir.data.season)) {
+                return ir.target_step;
+            }
+            break;
+        case EVENT_ToggleActorGroupFlag:
+            toggleActorGroupFlag(ir.data.actor_flag_descr.id, ir.data.actor_flag_descr.attr, ir.data.actor_flag_descr.is_set);
+            break;
+        case EVENT_ToggleChestFlag:
+            Chest::toggleFlag(ir.data.chest_flag_descr.chest_id, ir.data.chest_flag_descr.flag, ir.data.chest_flag_descr.is_set);
+            break;
+        case EVENT_CharacterAnimation:
+            for (Character &character : iterateCharacters(ir.who, vrng))
+                character.playReaction(ir.data.speech_id);
+            break;
+        case EVENT_SetActorItem:
+            Actor::giveItem(ir.data.npc_item_descr.id, ir.data.npc_item_descr.item, ir.data.npc_item_descr.is_give);
+            break;
+        case EVENT_CheckItemsCount: {
+            const auto &descr = ir.data.items_count_descr;
+            int count = 0;
+            for (Character &character : pParty->pCharacters)
+                for (InventoryEntry entry : character.inventory.entries())
+                    if (std::to_underlying(entry->itemId) >= descr.min_item_id && std::to_underlying(entry->itemId) <= descr.max_item_id)
+                        count++;
+            if (count >= descr.count)
+                return ir.target_step;
+            break;
+        }
+        case EVENT_RemoveItems: {
+            const auto &descr = ir.data.items_count_descr;
+            int left = descr.count;
+            for (Character &character : pParty->pCharacters) {
+                std::vector<InventoryEntry> matches;
+                for (InventoryEntry entry : character.inventory.entries())
+                    if (std::to_underlying(entry->itemId) >= descr.min_item_id && std::to_underlying(entry->itemId) <= descr.max_item_id)
+                        matches.push_back(entry);
+                for (InventoryEntry entry : matches)
+                    if (left-- > 0)
+                        character.inventory.take(entry);
+            }
+            break;
+        }
+        case EVENT_IsNPCInParty: // MM8 only, the id is a roster.txt line. MMExtension calls it CanPlayerAct.
+            for (const Character &character : pParty->pCharacters)
+                if (character.mm8RosterId == ir.data.npc_descr.npc_id && character.CanAct())
+                    return ir.target_step;
+            break;
+        case EVENT_SpecialJump: { // MM8 jump pads, MMExtension's evt.Jump. Angles are in 2048ths of a turn.
+            float speed = ir.data.jump_descr.speed;
+            float horizontal = speed * TrigLUT.cos(ir.data.jump_descr.z_angle);
+            pParty->launchVelocity = Vec2f(TrigLUT.cos(ir.data.jump_descr.direction), TrigLUT.sin(ir.data.jump_descr.direction)) * horizontal;
+            pParty->velocity.z = speed * TrigLUT.sin(ir.data.jump_descr.z_angle);
+            pParty->pos.z += 1; // So that the party leaves the ground, as a jump does.
+            pParty->uFlags |= PARTY_FLAG_JUMPING;
+            break;
+        }
+        case EVENT_IsTotalBountyHuntingAwardInRange:
+            if (pParty->uNumBountiesCollected >= ir.data.bounty_descr.min_gold && pParty->uNumBountiesCollected <= ir.data.bounty_descr.max_gold)
+                return ir.target_step;
+            break;
+        case EVENT_StopAnimation:
+            if (uCurrentlyLoadedLevelType == LEVEL_INDOOR)
+                stopDoorAnimation(ir.data.door_descr.door_id);
+            break;
+        // None of these appear in MM7 data.
+        case EVENT_OnDateTimer:
+        case EVENT_EnableDateTimer:
+            assert(false);
+            break;
+        default:
+            break;
+    }
+
+    return step + 1;
+}
+
+bool EvtInterpreter::executeRegular(int startStep) {
+    assert(startStep >= 0);
+
+    if (!_eventId || !_events.size()) {
+        return false;
+    }
+
+    int step = startStep;
+
+    _who = !pParty->hasActiveCharacter() ? CHOOSE_RANDOM : CHOOSE_ACTIVE;
+
+    while (step != -1 && !_cancelled) {
+        step = executeOneEvent(step, false);
+    }
+
+    return _mapExitTriggered;
+}
+
+bool EvtInterpreter::executeNpcDialogue(int startStep) {
+    assert(startStep >= 0);
+
+    if (!_eventId) {
+        return false;
+    }
+
+    if (!_events.size()) {
+        // No event commands found for current eventId
+        // In this case dialogue elements can be showed
+        return true;
+    }
+
+    int step = startStep;
+
+    _who = CHOOSE_PARTY;
+
+    while (step != -1) {
+        step = executeOneEvent(step, true);
+    }
+
+    // Originally was: "readyToExit ? (canShowOption != 0) : 2"
+    return !_readyToExit || _canShowOption;
+}
+
+void EvtInterpreter::prepare(const EvtProgram &eventMap, int eventId, Pid objectPid, bool canShowMessages) {
+    _eventId = eventId;
+    _canShowMessages = canShowMessages;
+    _objectPid = objectPid;
+
+    _events.clear();
+    if (eventMap.hasEvent(eventId)) {
+        _events = eventMap.function(eventId);
+    }
+}
+
+bool EvtInterpreter::isValid() {
+    return _events.size() > 0;
+}

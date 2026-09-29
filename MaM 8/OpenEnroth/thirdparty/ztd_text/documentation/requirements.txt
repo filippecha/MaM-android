@@ -1,0 +1,8 @@
+# Python requirements to generate documentation
+# Run: pip3 install -r requirements.txt
+sphinx==7.2.6
+sphinx_rtd_theme>=2.0.0
+breathe
+myst_parser
+cmake
+ninja

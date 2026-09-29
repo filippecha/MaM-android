@@ -1,0 +1,1946 @@
+#include "Game.h"
+
+#include <cstdlib>
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstring>
+#include <optional>
+#include <string>
+#include <vector>
+#include <string_view>
+#include <utility>
+#include <memory>
+
+#include "Arcomage/Arcomage.h"
+
+#include "Engine/AssetsManager.h"
+#include "Engine/Engine.h"
+#include "Engine/EngineCallObserver.h"
+#include "Engine/EngineGlobals.h"
+#include "Engine/Data/AwardEnums.h"
+#include "Engine/Data/HouseEnumFunctions.h"
+#include "Engine/Evt/Processor.h"
+#include "Engine/Graphics/DecalBuilder.h"
+#include "Engine/Graphics/ParticleEngine.h"
+#include "Engine/Graphics/LightsStack.h"
+#include "Engine/Graphics/Lighting.h"
+#include "Engine/Graphics/Renderer/Renderer.h"
+#include "Engine/Objects/Mm6Ids.h"
+#include "Engine/Objects/Mm8Ids.h"
+#include "Engine/Objects/Mm8Roster.h"
+#include "Engine/Objects/Decoration.h"
+#include "Engine/Graphics/Outdoor.h"
+#include "Engine/Graphics/Indoor.h"
+#include "Engine/Graphics/Overlays.h"
+#include "Engine/Graphics/Viewport.h"
+#include "Engine/Graphics/Vis.h"
+#include "Engine/Graphics/Image.h"
+#include "Engine/Graphics/TurnBasedOverlay.h"
+#include "Engine/Localization.h"
+#include "Engine/PartyPlacement.h"
+#include "Engine/Resources/LodTextureCache.h"
+#include "Engine/Objects/Actor.h"
+#include "Engine/Objects/Chest.h"
+#include "Engine/Objects/ObjectList.h"
+#include "Engine/Objects/SpriteObject.h"
+#include "Engine/Objects/NPC.h"
+#include "Engine/Objects/CharacterEnumFunctions.h"
+#include "Engine/Party.h"
+#include "Engine/SaveLoad.h"
+#include "Engine/Random/Random.h"
+#include "Engine/Spells/CastSpellInfo.h"
+#include "Engine/Spells/Mm6Spells.h"
+#include "Engine/Spells/SpellEnumFunctions.h"
+#include "Engine/Timer.h"
+#include "Engine/TurnEngine/TurnEngine.h"
+#include "Engine/MapEnumFunctions.h"
+#include "Engine/Tables/MapTable.h"
+
+#include "GUI/GUIButton.h"
+#include "GUI/GUIWindow.h"
+#include "GUI/GUIMessageQueue.h"
+#include "GUI/UI/Books/AutonotesBook.h"
+#include "GUI/UI/Books/CalendarBook.h"
+#include "GUI/UI/Books/JournalBook.h"
+#include "GUI/UI/Books/LloydsBook.h"
+#include "GUI/UI/Books/MapBook.h"
+#include "GUI/UI/Books/QuestBook.h"
+#include "GUI/UI/Books/TownPortalBook.h"
+#include "GUI/UI/UISpellbook.h"
+#include "GUI/UI/UIBooks.h"
+#include "GUI/UI/UICharacter.h"
+#include "GUI/UI/UIDialogue.h"
+#include "GUI/UI/UIBranchlessDialogue.h"
+#include "GUI/UI/UIGame.h"
+#include "GUI/UI/UIHouses.h"
+#include "GUI/UI/UITransition.h"
+#include "GUI/UI/UIMainMenu.h"
+#include "GUI/UI/UIGameOver.h"
+#include "GUI/UI/UIPartyCreation.h"
+#include "GUI/UI/UIQuickReference.h"
+#include "GUI/UI/UIRest.h"
+#include "GUI/UI/UISaveLoad.h"
+#include "GUI/UI/UIStatusBar.h"
+#include "GUI/UI/UISpell.h"
+#include "GUI/UI/UIChest.h"
+
+#include "Io/Mouse.h"
+#include "Io/KeyboardInputHandler.h"
+
+#include "Media/Audio/AudioPlayer.h"
+#include "Media/MediaPlayer.h"
+
+#include "Library/Platform/Application/PlatformApplication.h"
+#include "Library/Logger/Logger.h"
+#include "Library/Fsm/Fsm.h"
+#include "Library/Serialization/Serialization.h"
+
+#include "Utility/GameVariant.h"
+#include "Utility/String/Format.h"
+#include "Utility/String/Split.h"
+#include "Utility/ScopeGuard.h"
+
+#include "Application/GameStates/GameFsmBuilder.h"
+
+#include "GameWindowHandler.h"
+#include "GameMenu.h"
+
+/**
+ * Sets the minimap zoom and stores it in the config entry for the current level type.
+ *
+ * @param zoom                          New zoom, gets clamped to the limits of the current level type.
+ */
+static void setMinimapZoom(int zoom) {
+    if (uCurrentlyLoadedLevelType == LEVEL_INDOOR) {
+        zoom = std::clamp(zoom, 256, 4096);
+        engine->config->settings.MinimapZoomIndoor.setValue(zoom);
+    } else {
+        zoom = std::clamp(zoom, 512, 2048);
+        engine->config->settings.MinimapZoomOutdoor.setValue(zoom);
+    }
+    viewparams->uMinimapZoom = zoom;
+}
+
+Game::Game(PlatformApplication *application, std::shared_ptr<GameConfig> config) {
+    _application = application;
+    _config = config;
+    _menu = std::make_unique<Menu>();
+    _decalBuilder = EngineIocContainer::ResolveDecalBuilder();
+}
+
+Game::~Game() = default;
+
+int Game::run() {
+    window->activate();
+    ::eventLoop->processMessages(eventHandler);
+
+    std::string_view startingState = "Start";
+    // Need to have this do/while external loop till we remove entirely all the states
+    do {
+        {
+            Fsm *fsm = application->installComponent(GameFsmBuilder::buildFsm(startingState));
+            MM_AT_SCOPE_EXIT(application->removeComponent<Fsm>());
+            while (!fsm->hasReachedExitState()) {
+                render->ClearTarget(colorTable.Black);
+                render->BeginScene2D();
+
+                fsm->update();
+
+                // This method should be interpreted as a future RetainedUISystem::update()
+                // It does update all the GUIWindow alive + it does various hacks
+                GUI_UpdateWindows();
+                render->flushAndScale();
+                engine->drawOverlay();
+                render->swapBuffers();
+
+                MessageLoopWithWait();
+            }
+        }
+
+        // Here we're still running the rest of the loops as usual.
+        uGameState = GAME_STATE_PLAYING;
+        if (!loop()) {
+            break;
+        } else {
+            startingState = "MainMenu";
+        }
+    } while (true);
+
+    // Clean up primary window should be the only one left now
+    assert(lWindowList.size() == 1);
+    pPrimaryWindow = nullptr;
+
+    return 0;
+}
+
+bool Game::loop() {
+    while (true) {
+        if (uGameState == GAME_FINISHED ||
+            GetCurrentMenuID() == MENU_EXIT_GAME) {
+            return false;
+        } else if (GetCurrentMenuID() == MENU_LoadingProcInMainMenu) {
+            uGameState = GAME_STATE_PLAYING;
+            gameLoop();
+            if (uGameState == GAME_STATE_NEWGAME_OUT_GAMEMENU) {
+                SetCurrentMenuID(MENU_NEWGAME);
+                uGameState = GAME_STATE_PLAYING;
+                continue;
+            }
+            break;
+        } else if (GetCurrentMenuID() == MENU_NEWGAME) {
+            pActiveOverlayList->Reset();
+            if (!PartyCreationUI_Loop()) {
+                break;
+            }
+
+            pParty->pPickedItem.itemId = ITEM_NULL;
+
+            MapId startMap = MAP_EMERALD_ISLAND;
+            if (isMm6())
+                startMap = pMapTable->GetMapInfo("oute3.odm"); // New Sorpigal.
+            if (isMm8())
+                startMap = pMapTable->GetMapInfo("out01.odm"); // Dagger Wound Island.
+            engine->_pendingTransition = MapDestination(startMap, MAP_START_POINT_PARTY);
+
+            bFlashQuestBook = true;
+            pMediaPlayer->PlayFullscreenMovie("Intro Post");
+            saveNewGame();
+            if (engine->config->debug.NoMargaret.value()) {
+                pParty->_questBits.set(QBIT_EMERALD_ISLAND_MARGARETH_OFF);
+            }
+
+            gameLoop();
+            if (uGameState == GAME_STATE_NEWGAME_OUT_GAMEMENU) {
+                SetCurrentMenuID(MENU_NEWGAME);
+                uGameState = GAME_STATE_PLAYING;
+                continue;
+            } else if (uGameState == GAME_STATE_GAME_QUITTING_TO_MAIN_MENU) {
+                break;
+            }
+            assert(false && "Invalid game state");
+        } else if (GetCurrentMenuID() == MENU_5 || GetCurrentMenuID() == MENU_LoadingProcInMainMenu) {
+            uGameState = GAME_STATE_PLAYING;
+            gameLoop();
+        }
+        if (uGameState == GAME_STATE_LOADING_GAME) {
+            SetCurrentMenuID(MENU_5);
+            uGameState = GAME_STATE_PLAYING;
+            continue;
+        }
+        if (uGameState == GAME_STATE_NEWGAME_OUT_GAMEMENU) {
+            SetCurrentMenuID(MENU_NEWGAME);
+            uGameState = GAME_STATE_PLAYING;
+            continue;
+        }
+        if (uGameState == GAME_STATE_GAME_QUITTING_TO_MAIN_MENU) {  // from the loaded game
+            uGameState = GAME_STATE_PLAYING;
+            break;
+        }
+    }
+
+    return true;
+}
+
+GraphicsImage *gamma_preview_image = nullptr;  // 506E40
+
+void Game_StartDialogue(int actor_id) {
+    if (pParty->hasActiveCharacter()) {
+        engine->_messageQueue->clear();
+
+        initializeNPCDialogue(pActors[actor_id].npcId, true, &pActors[actor_id]);
+    }
+}
+
+void Game_StartHirelingDialogue(int hireling_id) {
+    assert(hireling_id == 0 || hireling_id == 1);
+
+    if (isHirelingsBlockedOnMap(engine->_currentLoadedMapId) || current_screen_type != SCREEN_GAME)
+        return;
+
+    engine->_messageQueue->clear();
+
+    FlatHirelings buf;
+    buf.Prepare();
+
+    int index = hireling_id + pParty->hirelingScrollPosition;
+    if (index < buf.Size()) {
+        if (buf.GetSacrificeStatus(index) && buf.GetSacrificeStatus(index)->inProgress)
+            return; // Hireling is being dark sacrificed.
+
+        initializeNPCDialogue(-1 - pParty->hirelingScrollPosition - hireling_id, true);
+    }
+}
+
+void Game::closeTargetedSpellWindow() {
+    if (pGUIWindow_CastTargetedSpell) {
+        if (current_screen_type == SCREEN_CHARACTERS) {
+            mouse->SetCursorImage("MICON2");
+        } else {
+            pGUIWindow_CastTargetedSpell = nullptr;
+            mouse->SetCursorImage("MICON1");
+            engine->_statusBar->clearEvent();
+            IsEnchantingInProgress = false;
+            back_to_game();
+        }
+    }
+}
+
+void Game::onEscape() {
+    closeTargetedSpellWindow();
+
+    pParty->switchToNextActiveCharacter();  // always check this - could leave
+                                           // shops with characters who couldnt
+                                           // act sctive
+
+    window_SpeakInHouse = nullptr;
+    pGUIWindow_CurrentMenu = nullptr;
+
+    gameTimer->setPaused(false);
+    current_screen_type = SCREEN_GAME;
+}
+
+bool IsWindowSwitchable() {
+    if (current_screen_type == SCREEN_NPC_DIALOGUE || current_screen_type == SCREEN_HOUSE
+        || current_screen_type == SCREEN_INPUT_BLV || current_screen_type == SCREEN_CHANGE_LOCATION) {
+        return false;
+    }
+    return true;
+}
+
+void Game::processQueuedMessages() {
+    bool playButtonSoundOnEscape = true;
+
+    if (bDialogueUI_InitializeActor_NPC_ID) {
+        initializeNPCDialogue(bDialogueUI_InitializeActor_NPC_ID, false);
+        bDialogueUI_InitializeActor_NPC_ID = 0;
+    }
+
+    UIMessageType uMessage = UIMSG_0;
+    int uMessageParam = 0;
+    int uMessageParam2 = 0;
+    while (engine->_messageQueue->haveMessages()) {
+        engine->_messageQueue->popMessage(&uMessage, &uMessageParam, &uMessageParam2);
+        if (engine->callObserver) {
+            engine->callObserver->notify(CALL_PROCESS_UIMSG, uMessage);
+        }
+        switch (uMessage) {
+            case UIMSG_ChangeGameState:
+                uGameState = GAME_FINISHED;
+                continue;
+            case UIMSG_PlayArcomage:
+                BackToHouseMenu();
+                pArcomageGame->_gameInProgress = true;
+                ArcomageGame::PrepareArcomage();
+                continue;
+
+            case UIMSG_StartNPCDialogue:
+                Game_StartDialogue(uMessageParam);
+                continue;
+            case UIMSG_StartHireling1Dialogue:
+            case UIMSG_StartHireling2Dialogue:
+                Game_StartHirelingDialogue(uMessage == UIMSG_StartHireling1Dialogue ? 0 : 1);
+                continue;
+            case UIMSG_HouseScreenClick:
+                if (window_SpeakInHouse) {
+                    window_SpeakInHouse->houseScreenClick();
+                }
+                continue;
+            case UIMSG_SelectHouseNPCDialogueOption:
+                selectHouseNPCDialogueOption((DialogueId)uMessageParam);
+                continue;
+            case UIMSG_SelectProprietorDialogueOption:
+                selectProprietorDialogueOption((DialogueId)uMessageParam);
+                continue;
+            case UIMSG_SelectNPCDialogueOption:
+                selectNPCDialogueOption((DialogueId)uMessageParam);
+                continue;
+            case UIMSG_CloseDialogueWindow:
+                pDialogueWindow = nullptr;
+                continue;
+            case UIMSG_ClickHouseNPCPortrait:
+                updateHouseNPCTopics(uMessageParam);
+                continue;
+                // case UIMSG_StartNewGame:
+                // Game_StartNewGameWhilePlaying(uMessageParam); continue;
+                // case UIMSG_Game_OpenLoadGameDialog:
+                // Game_OpenLoadGameDialog(); continue; case UIMSG_Quit:
+                // Game_QuitGameWhilePlaying(uMessageParam); continue;
+            case UIMSG_80:
+                assert(false);
+                pGUIWindow_CurrentMenu = nullptr;
+                current_screen_type = SCREEN_OPTIONS;
+                // pGUIWindow_CurrentMenu =
+                // GUIWindow::Create(0, 0,
+                // window->GetWidth(), window->GetHeight(),
+                // WINDOW_8, 0, 0);
+                continue;
+            case UIMSG_Cancel:
+                new OnCancel({350, 302}, {106, 42}, pBtnCancel);
+                continue;
+            case UIMSG_OpenQuestBook:
+                engine->_messageQueue->clear();
+                // toggle
+                if (current_screen_type == SCREEN_BOOKS && pGUIWindow_CurrentMenu->eWindowType == WindowType::WINDOW_QuestBook) {
+                    if (!uMessageParam) // MM8 book icons send 1 and keep the book open.
+                        engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                    continue;
+                }
+                // cant open screen - talking or in shop or map transition
+                if (!IsWindowSwitchable()) {
+                    continue;
+                } else {
+                    // close out current window
+                    back_to_game();
+                    onEscape();
+                    engine->_statusBar->clearAll();
+                }
+                // open window
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_QuestBook>();
+                continue;
+            case UIMSG_OpenAutonotes:
+                engine->_messageQueue->clear();
+                // toggle
+                if (current_screen_type == SCREEN_BOOKS && pGUIWindow_CurrentMenu->eWindowType == WindowType::WINDOW_AutonotesBook) {
+                    if (!uMessageParam) // MM8 book icons send 1 and keep the book open.
+                        engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                    continue;
+                }
+                // cant open screen - talking or in shop or map transition
+                if (!IsWindowSwitchable()) {
+                    continue;
+                } else {
+                    // close out current window
+                    back_to_game();
+                    onEscape();
+                    engine->_statusBar->clearAll();
+                }
+                // open window
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_AutonotesBook>();
+                continue;
+            case UIMSG_OpenMapBook:
+                engine->_messageQueue->clear();
+                // toggle
+                if (current_screen_type == SCREEN_BOOKS && pGUIWindow_CurrentMenu->eWindowType == WindowType::WINDOW_MapsBook) {
+                    if (!uMessageParam) // MM8 book icons send 1 and keep the book open.
+                        engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                    continue;
+                }
+                // cant open screen - talking or in shop or map transition
+                if (!IsWindowSwitchable()) {
+                    continue;
+                } else {
+                    // close out current window
+                    back_to_game();
+                    onEscape();
+                    engine->_statusBar->clearAll();
+                }
+                // open window;
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_MapBook>();
+                continue;
+            case UIMSG_OpenMm8Book: {
+                static constexpr std::array<UIMessageType, 4> books = {UIMSG_OpenMapBook, UIMSG_OpenQuestBook, UIMSG_OpenHistoryBook, UIMSG_OpenAutonotes};
+                engine->_messageQueue->addMessageCurrentFrame(books[std::to_underlying(mm8LastBookPage)], 0, 0);
+                continue;
+            }
+            case UIMSG_OpenCalendar:
+                if (isMm8())
+                    continue; // MM8 has no calendar book.
+                engine->_messageQueue->clear();
+                // toggle
+                if (current_screen_type == SCREEN_BOOKS && pGUIWindow_CurrentMenu->eWindowType == WindowType::WINDOW_CalendarBook) {
+                    engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                    continue;
+                }
+                // cant open screen - talking or in shop or map transition
+                if (!IsWindowSwitchable()) {
+                    continue;
+                } else {
+                    // close out current window
+                    back_to_game();
+                    onEscape();
+                    engine->_statusBar->clearAll();
+                }
+                // open window
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_CalendarBook>();
+                continue;
+            case UIMSG_OpenHistoryBook:
+                engine->_messageQueue->clear();
+                // toggle
+                if (current_screen_type == SCREEN_BOOKS && pGUIWindow_CurrentMenu->eWindowType == WindowType::WINDOW_JournalBook) {
+                    if (!uMessageParam) // MM8 book icons send 1 and keep the book open.
+                        engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                    continue;
+                }
+                // cant open screen - talking or in shop or map transition
+                if (!IsWindowSwitchable()) {
+                    continue;
+                } else {
+                    // close out current window
+                    back_to_game();
+                    onEscape();
+                    engine->_statusBar->clearAll();
+                }
+                // open window
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_JournalBook>();
+                continue;
+            case UIMSG_Escape:
+                back_to_game();
+                engine->_messageQueue->clear();
+                switch (current_screen_type) {
+                    case SCREEN_SHOP_INVENTORY:
+                    case SCREEN_NPC_DIALOGUE:
+                    case SCREEN_CHEST:
+                    case SCREEN_CHEST_INVENTORY:
+                    case SCREEN_CHANGE_LOCATION:
+                    case SCREEN_INPUT_BLV:
+                    case SCREEN_QUICK_REFERENCE:
+                        if (playButtonSoundOnEscape) {
+                            PlayButtonClickSound();
+                            uMessageParam = 1;
+                        }
+                        break;
+                    case SCREEN_HOUSE:
+                        if (playButtonSoundOnEscape) {
+                            PlayButtonClickSound();
+                            uMessageParam = 1;
+                            break;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+
+                if (pGameOverWindow) {
+                    if (pGameOverWindow->toggleAndTestFinished()) {
+                        pGameOverWindow = nullptr;
+                    }
+                    continue;
+                }
+
+                if (current_screen_type == SCREEN_GAME) {
+                    if (!pGUIWindow_CastTargetedSpell) {  // Draw Menu
+                        new OnButtonClick({602, 450}, {0, 0}, pBtn_GameSettings, std::string(), false);
+
+                        engine->_messageQueue->clear();
+                        _menu->MenuLoop();
+                    } else {
+                        pGUIWindow_CastTargetedSpell = nullptr;
+                        mouse->SetCursorImage("MICON1");
+                        engine->_statusBar->clearEvent();
+                        IsEnchantingInProgress = false;
+                        back_to_game();
+                    }
+                    continue;
+                } else if (current_screen_type == SCREEN_MENU) {
+                    break;
+                } else if (
+                    current_screen_type == SCREEN_SAVEGAME ||
+                    current_screen_type == SCREEN_LOADGAME) {
+                    break;
+                } else if (current_screen_type == SCREEN_OPTIONS) {
+                    break;
+                } else if (current_screen_type == SCREEN_VIDEO_OPTIONS) {
+                    break;
+                } else if (current_screen_type == SCREEN_KEYBOARD_OPTIONS) {
+                    break;
+                } else {
+                    if (current_screen_type > SCREEN_67) {
+                        if (current_screen_type == SCREEN_QUICK_REFERENCE) {
+                            onEscape();
+                            continue;
+                        }
+                    } else {
+                        if (current_screen_type < SCREEN_64) {
+                            switch (current_screen_type) {
+                                case SCREEN_CASTING:
+                                    if (enchantingActiveCharacter != -1) {
+                                        pParty->setActiveCharacterIndex(enchantingActiveCharacter);
+                                        pParty->switchToNextActiveCharacter();
+                                        enchantingActiveCharacter = -1;
+                                        if (pParty->bTurnBasedModeOn) {
+                                            pTurnEngine->ApplyPlayerAction();
+                                        }
+                                        AfterEnchClickEventId = UIMSG_0;
+                                        AfterEnchClickEventSecondParam = 0;
+                                        AfterEnchClickEventTimeout = 0_ticks;
+                                    }
+                                    if (ptr_50C9A4_ItemToEnchant &&
+                                        ptr_50C9A4_ItemToEnchant->itemId != ITEM_NULL) {
+                                        ptr_50C9A4_ItemToEnchant->flags &= ~ITEM_ENCHANT_ANIMATION_MASK;
+                                        ItemEnchantmentTimer = 0_ticks;
+                                        ptr_50C9A4_ItemToEnchant = nullptr;
+                                    }
+                                    onEscape();
+                                    continue;
+                                case SCREEN_BOOKS:
+                                    gameTimer->setPaused(false);
+                                    onEscape();
+                                    continue;
+                                case SCREEN_CHEST_INVENTORY:
+                                    current_screen_type = SCREEN_CHEST;
+                                    continue;
+                                case SCREEN_CHEST:
+                                    pGUIWindow_CurrentChest = nullptr;
+                                    current_screen_type = SCREEN_GAME;
+                                    gameTimer->setPaused(false);
+                                    continue;
+                                case SCREEN_REST:  // close rest screen
+                                    if (currentRestType != REST_NONE) {
+                                        Rest(remainingRestTime);
+                                        for (Character &character : pParty->pCharacters) {
+                                            character.conditions.reset(CONDITION_SLEEP);
+                                        }
+                                    }
+                                    if (rest_ui_sky_frame_current) {
+                                        rest_ui_sky_frame_current->release();
+                                        rest_ui_sky_frame_current = nullptr;
+                                    }
+
+                                    if (rest_ui_hourglass_frame_current) {
+                                        rest_ui_hourglass_frame_current->release();
+                                        rest_ui_hourglass_frame_current = nullptr;
+                                    }
+
+                                    if (uCurrentlyLoadedLevelType == LEVEL_OUTDOOR) {
+                                        pOutdoor->UpdateSunlightVectors();
+                                        pOutdoor->UpdateFog();
+                                    }
+                                    remainingRestTime = Duration();
+                                    currentRestType = REST_NONE;
+                                    onEscape();
+                                    continue;
+                                case SCREEN_SHOP_INVENTORY:
+                                    pGUIWindow_CurrentMenu = nullptr;
+                                    current_screen_type = SCREEN_HOUSE;
+                                    continue;
+                                case SCREEN_HOUSE:
+                                    if (uGameState == GAME_STATE_CHANGE_LOCATION) {
+                                        while (houseDialogPressEscape()) {}
+                                    } else {
+                                        if (houseDialogPressEscape())
+                                            continue;
+                                    }
+                                    window_SpeakInHouse->playHouseGoodbyeSpeech();
+                                    pAudioPlayer->playHouseSound(SOUND_WoodDoorClosing, false);
+                                    pMediaPlayer->Unload();
+
+                                    onEscape();
+                                    continue;
+                                case SCREEN_INPUT_BLV:  // click escape
+                                    if (uCurrentHouse_Animation == 153) // TODO(Nik-RE-dev): what is this? Btw, 153 == HOUSE_EARTH_GUILD_STONE_CITY.
+                                        playHouseSound(HOUSE_EARTH_GUILD_STONE_CITY, HOUSE_SOUND_MAGIC_GUILD_MEMBERS_ONLY);
+                                    pMediaPlayer->Unload();
+                                    if (npcIdToDismissAfterDialogue) {
+                                        pParty->hirelingScrollPosition = 0;
+                                        pNPCStats->pNPCData[npcIdToDismissAfterDialogue].flags &= ~NPC_HIRED;
+                                        pParty->CountHirelings();
+                                        npcIdToDismissAfterDialogue = 0;
+                                    }
+                                    DialogueEnding();
+                                    current_screen_type = SCREEN_GAME;
+                                    continue;
+                                case SCREEN_NPC_DIALOGUE:  // click escape
+                                    if (npcIdToDismissAfterDialogue) {
+                                        pParty->hirelingScrollPosition = 0;
+                                        pNPCStats->pNPCData[npcIdToDismissAfterDialogue].flags &= ~NPC_HIRED;
+                                        pParty->CountHirelings();
+                                        npcIdToDismissAfterDialogue = 0;
+                                    }
+                                    // goto LABEL_317;
+                                    DialogueEnding();
+                                    current_screen_type = SCREEN_GAME;
+                                    continue;
+                                case SCREEN_BRANCHLESS_NPC_DIALOG:  // click escape
+                                    engine->_statusBar->clearEvent();
+
+                                    releaseBranchlessDialogue();
+                                    DialogueEnding();
+                                    current_screen_type = SCREEN_GAME;
+                                    continue;
+                                case SCREEN_CHANGE_LOCATION: // escape
+                                    pParty->pos.x = std::clamp(pParty->pos.x, -maxPartyAxisDistance, maxPartyAxisDistance);
+                                    pParty->pos.y = std::clamp(pParty->pos.y, -maxPartyAxisDistance, maxPartyAxisDistance);
+                                    pMediaPlayer->Unload();
+                                    DialogueEnding();
+                                    onEscape();
+                                    continue;
+                                case SCREEN_VIDEO:
+                                    pMediaPlayer->Unload();
+                                    continue;
+                                case SCREEN_CHARACTERS:
+                                    CharacterUI_ReleaseButtons();
+                                    (dynamic_cast<GUIWindow_CharacterRecord*>(pGUIWindow_CurrentMenu.get()))->releaseAwardsScrollBar();
+                                    onEscape();
+                                    continue;
+                                case SCREEN_SPELL_BOOK:
+                                    onEscape();
+                                    continue;
+
+                                default:
+                                    assert(false);  // which GAME_MENU is this?
+                                    onEscape();
+                                    continue;
+                            }
+                            assert(false);  // which GAME_MENU is this?
+                            onEscape();
+                            continue;
+                        }
+                        assert(false);  // which GAME_MENU is this?
+                        CharacterUI_ReleaseButtons();
+                        //ReleaseAwardsScrollBar();
+                    }
+                    // assert(false);  // which GAME_MENU is this? debug / fallback
+                    onEscape();
+                    continue;
+                }
+                continue;
+
+            case UIMSG_ScrollNPCPanel:  // Right and Left button for NPCPanel
+                if (uMessageParam) {
+                    new OnButtonClick({626, 179 + 2 * (pParty->alignment == PartyAlignment::PartyAlignment_Evil) }, {0, 0}, pBtn_NPCRight);
+                    int maxScrollPosition = (!pParty->pHirelings[0].name.empty()) +
+                                            (!pParty->pHirelings[1].name.empty()) +
+                                            (uint8_t)pParty->cNonHireFollowers - 2;
+                    if (pParty->hirelingScrollPosition < maxScrollPosition) {
+                        ++pParty->hirelingScrollPosition;
+                    }
+                } else {
+                    new OnButtonClick({469, 179}, {0, 0}, pBtn_NPCLeft);
+                    if (pParty->hirelingScrollPosition > 0) {
+                        --pParty->hirelingScrollPosition;
+                    }
+                }
+                GameUI_DrawHiredNPCs();
+                continue;
+
+            case UIMSG_OnIndoorEntryExit: {
+                assert(pDialogueWindow && pDialogueWindow->eWindowType == WINDOW_IndoorEntryExit);
+                GUIWindow_IndoorEntryExit *window = static_cast<GUIWindow_IndoorEntryExit *>(pDialogueWindow.get());
+                MapDestination destination = window->destination();
+
+                engine->_messageQueue->clear();
+                playButtonSoundOnEscape = false;
+                // PID_INVALID was used (exclusive sound)
+                pAudioPlayer->playUISound(SOUND_StartMainChoice02);
+
+                // PlayHouseSound(  // this is wrong - what is it meant to do??
+                //    uCurrentHouse_Animation,
+                //    HouseSound_NotEnoughMoney);
+
+                if (pMovie_Track)
+                    pMediaPlayer->Unload();
+                DialogueEnding();
+
+                if (destination.map() != MAP_INVALID) {
+                    //pGameLoadingUI_ProgressBar->Initialize(GUIProgressBar::TYPE_Box);
+                    bool leavingArena = isArenaMap(engine->_currentLoadedMapId);
+                    onMapLeave();
+                    startMapTransition(destination);
+                    if (leavingArena)
+                        pParty->GetPlayingTime() += Duration::fromDays(4);
+                } else if (std::optional<PartyPlacement> placement = destination.resolvePlacement()) {
+                    placeParty(*placement);
+                } else {
+                    eventProcessor(savedEventID, Pid(), 1, savedEventStep);
+                    if (current_screen_type == SCREEN_HOUSE) { // MM6 castle gates continue into the throne room.
+                        PlayButtonClickSound();
+                        continue;
+                    }
+                }
+
+                PlayButtonClickSound();
+                DialogueEnding();
+                back_to_game();
+                onEscape();
+                continue;
+            }
+            case UIMSG_CancelIndoorEntryExit:
+                PlayButtonClickSound();
+                pMediaPlayer->Unload();
+                DialogueEnding();
+                back_to_game();
+                onEscape();
+                continue;
+            case UIMSG_CycleCharacters:
+                if (pParty->hasActiveCharacter()) {
+                    pParty->setActiveCharacterIndex(cycleCharacter(keyboardInputHandler->IsAdventurerBackcycleToggled()));
+                }
+                continue;
+            case UIMSG_OnTravelByFoot: {
+                engine->_messageQueue->clear();
+                playButtonSoundOnEscape = false;
+
+                pAudioPlayer->playUISound(SOUND_StartMainChoice02);
+                // encounter_index = (NPCData *)getTravelTime();
+                MapDestination travelDestination = pOutdoor->getTravelDestination(pParty->pos.x, pParty->pos.y);
+                if (!engine->IsUnderwater() && pParty->bFlying || travelDestination.map() == MAP_INVALID) {
+                    PlayButtonClickSound();
+                    pParty->pos.x = std::clamp(pParty->pos.x, -maxPartyAxisDistance, maxPartyAxisDistance);
+                    pParty->pos.y = std::clamp(pParty->pos.y, -maxPartyAxisDistance, maxPartyAxisDistance);;
+                    DialogueEnding();
+                    current_screen_type = SCREEN_GAME;
+                } else {
+                    DialogueEnding();
+                    pAudioPlayer->stopSounds();
+                    gameTimer->setPaused(true);
+                    autoSave();
+                    uGameState = GAME_STATE_CHANGE_LOCATION;
+                    engine->_pendingTransition = travelDestination;
+                    // TODO(Nik-RE-dev): rest and heal uncoditionally even if party does not have food?
+                    restAndHeal(Duration::fromDays(getTravelTime()));
+                    if (pParty->GetFood() > 0) {
+                        pParty->restAndHeal();
+                        if (pParty->GetFood() < getTravelTime()) {
+                            for (Character &character : pParty->pCharacters)
+                                character.SetCondition(CONDITION_WEAK, 0);
+                            ++pParty->days_played_without_rest;
+                        }
+                        pParty->TakeFood(getTravelTime());
+                    } else {
+                        for (Character &character : pParty->pCharacters)
+                            character.SetCondition(CONDITION_WEAK, 0);
+                        ++pParty->days_played_without_rest;
+                    }
+                }
+                continue;
+            }
+            case UIMSG_CancelTravelByFoot:
+                PlayButtonClickSound();
+                pParty->pos.x = std::clamp(pParty->pos.x, -maxPartyAxisDistance, maxPartyAxisDistance);
+                pParty->pos.y = std::clamp(pParty->pos.y, -maxPartyAxisDistance, maxPartyAxisDistance);
+                DialogueEnding();
+                current_screen_type = SCREEN_GAME;
+                continue;
+            case UIMSG_CastSpell_Telekinesis: {
+                Pid pid = engine->PickMouseForTargeting().pid;
+                ObjectType type = pid.type();
+                int id = pid.id();
+                bool interactionPossible = false;
+                if (type == OBJECT_Actor) {
+                    interactionPossible = pActors[id].aiState == Dead;
+                }
+                if (type == OBJECT_Sprite) {
+                    interactionPossible = !(pObjectList->pObjects[pSpriteObjects[id].uObjectDescID].uFlags & OBJECT_DESC_UNPICKABLE);
+                }
+                if (type == OBJECT_Decoration) {
+                    interactionPossible = pLevelDecorations[id].uEventID != 0 || pLevelDecorations[id].IsInteractive();
+                }
+                if (type == OBJECT_Face) {
+                    if (uCurrentlyLoadedLevelType == LEVEL_OUTDOOR) {
+                        BLVFace *pBLVFace = &pOutdoor->pBModels[id >> 6].faces[id & 0x3F];
+                        interactionPossible = (pBLVFace->Clickable() && pBLVFace->eventId);
+                    } else { // Indoor
+                        BLVFace *pBLVFace = &pIndoor->faces[id];
+                        interactionPossible = pBLVFace->Clickable() && pBLVFace->eventId;
+                    }
+                }
+                if (interactionPossible) {
+                    spellTargetPicked(pid, -1);
+                    closeTargetedSpellWindow();
+                }
+                continue;
+            }
+            case UIMSG_CastSpell_Hireling: {
+                FlatHirelings buf;
+                buf.Prepare();
+                int flatHirelingId = pParty->hirelingScrollPosition + uMessageParam;
+                if (flatHirelingId >= buf.Size())
+                    continue; // Can't cast sacrifice on an empty slot.
+
+                engine->_messageQueue->clear();
+                spellTargetPicked(Pid(), uMessageParam);
+                closeTargetedSpellWindow();
+                continue;
+            }
+            case UIMSG_CastSpell_TargetCharacter:
+                engine->_messageQueue->clear();
+                if (IsEnchantingInProgress) {
+                    // Change character while enchanting is active
+                    // TODO(Nik-RE-dev): need separate message type
+                    pParty->setActiveCharacterIndex(uMessageParam);
+                } else {
+                    spellTargetPicked(Pid(), uMessageParam);
+                    closeTargetedSpellWindow();
+                }
+                continue;
+
+            case UIMSG_HouseTransitionConfirmation: {
+                assert(false);
+                playButtonSoundOnEscape = false;
+                pAudioPlayer->playUISound(SOUND_StartMainChoice02);
+                autoSave();
+                MapDestination destination(houseNpcs[currentHouseNpc].targetMapID, MAP_START_POINT_PARTY);
+                dword_6BE364_game_settings_1 |= GAME_SETTINGS_SKIP_WORLD_UPDATE;
+                uGameState = GAME_STATE_CHANGE_LOCATION;
+                // v53 = buildingTable_minus1_::30[26 * (unsigned
+                // int)ptr_507BC0->ptr_1C];
+                uint16_t v53 = std::to_underlying(houseTable[window_SpeakInHouse->houseId()]._quest_bit); // TODO(captainurist): what's going on here?
+                if (v53 < 0) {
+                    int v54 = std::abs(v53) - 1;
+                    destination = MapDestination(houseNpcs[currentHouseNpc].targetMapID,
+                                                 PartyPlacement(Vec3f(teleportX[v54], teleportY[v54], teleportZ[v54]), teleportYaw[v54], 0, 0));
+                }
+                engine->_pendingTransition = destination;
+                houseDialogPressEscape();
+                engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 1, 0);
+                continue;
+            }
+            case UIMSG_OnCastTownPortal: {
+                SpellCastFlags flags = static_cast<SpellCastFlags>(uMessageParam2);
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_TownPortalBook>(Pid::fromPacked(uMessageParam), flags);
+                if (flags & ON_CAST_TownPortalToLastTown)
+                    static_cast<GUIWindow_TownPortalBook *>(pGUIWindow_CurrentMenu.get())->clickTown(GUIWindow_TownPortalBook::mm6LastTown());
+                continue;
+            }
+
+            case UIMSG_OnCastLloydsBeacon:
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_LloydsBook>(Pid::fromPacked(uMessageParam), static_cast<SpellCastFlags>(uMessageParam2));
+                continue;
+
+            case UIMSG_LloydBookFlipButton:
+                if (pGUIWindow_CurrentMenu) {
+                    (dynamic_cast<GUIWindow_LloydsBook*>(pGUIWindow_CurrentMenu.get()))->flipButtonClicked(uMessageParam != 0);
+                }
+                continue;
+
+            case UIMSG_CloseAfterInstallBeacon:
+                playButtonSoundOnEscape = false;
+                engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                continue;
+
+            case UIMSG_InstallOrRecallBeacon:
+                if (pGUIWindow_CurrentMenu) {
+                    (dynamic_cast<GUIWindow_LloydsBook*>(pGUIWindow_CurrentMenu.get()))->installOrRecallBeacon(uMessageParam);
+                }
+                continue;
+
+            case UIMSG_ClickTownInTP:
+                if (pGUIWindow_CurrentMenu) {
+                    (dynamic_cast<GUIWindow_TownPortalBook*>(pGUIWindow_CurrentMenu.get()))->clickTown(uMessageParam);
+                }
+                continue;
+
+            case UIMSG_ShowGameOverWindow: {
+                bool lost = uMessageParam;
+                if (isMm6()) { // MM6.exe 0x4A6CB0.
+                    pMediaPlayer->PlayFullscreenMovie("comped");
+                    pMediaPlayer->PlayFullscreenMovie(lost ? "planetxp" : "end_dome");
+                    if (!lost)
+                        pMediaPlayer->PlayFullscreenMovie("end_seq1");
+                }
+                pGameOverWindow = std::make_unique<GUIWindow_GameOver>(UIMSG_OnGameOverWindowClose, lost);
+                uGameState = GAME_STATE_FINAL_WINDOW;
+                continue;
+            }
+            case UIMSG_OnGameOverWindowClose:
+                pAudioPlayer->stopSounds();
+                autoSave();
+                if (isMm6() || isMm8()) { // MM6.exe 0x4A6CB0 goes back to the game where the party is, Harmondale is MM7's.
+                    uGameState = GAME_STATE_PLAYING;
+                    continue;
+                }
+
+                pParty->pos = Vec3f(-17331, 12547, 465); // respawn point in Harmondale
+                pParty->velocity = Vec3f();
+                pParty->_viewYaw = 0;
+                pParty->uFallStartZ = pParty->pos.z;
+                pParty->_viewPitch = 0;
+
+                // change map to Harmondale
+                engine->_pendingTransition = MapDestination(MAP_HARMONDALE, PartyPlacement(pParty->pos, pParty->_viewYaw, pParty->_viewPitch, 0));
+                PrepareWorld(1);
+                Actor::InitializeActors();
+
+                uGameState = GAME_STATE_PLAYING;
+
+                for (Character &character : pParty->pCharacters) {
+                    character.playEmotion(PORTRAIT_WIDE_SMILE, 0_ticks);
+                }
+
+                // strcpy((char *)userInputHandler->pPressedKeysBuffer, "2");
+                // assert(false);  // missed break/continue?
+                continue;
+
+            case UIMSG_DD: {
+                assert(false);
+                std::array<std::string_view, 3> tokens = split(keyboardInputHandler->GetTextInput()).by(' ').skip("");
+                std::string status_string;
+                if (tokens[1].empty()) {
+                    // 1-token form: map index.
+                    if (tokens[0].empty()) continue;
+                    MapId map_index = static_cast<MapId>(fromString<int>(tokens[0]));
+                    if (!allMaps().contains(map_index))
+                        continue;
+                    engine->_pendingTransition = MapDestination(map_index, MAP_START_POINT_PARTY);
+                    dword_6BE364_game_settings_1 |= GAME_SETTINGS_SKIP_WORLD_UPDATE;
+                    uGameState = GAME_STATE_CHANGE_LOCATION;
+                    onMapLeave();
+                    continue;
+                } else {
+                    // 3-token form: x y z. 2-token input is malformed.
+                    if (tokens[2].empty()) continue;
+                    int x = fromString<int>(tokens[0]);
+                    int y = fromString<int>(tokens[1]);
+                    int z = fromString<int>(tokens[2]);
+                    if (uCurrentlyLoadedLevelType == LEVEL_INDOOR) {
+                        if (pIndoor->GetSector(x, y, z)) {
+                            pParty->pos = Vec3f(x, y, z);
+                            pParty->uFallStartZ = z;
+                            continue;
+                        }
+                    } else {
+                        if ((x > -32768) && (x < 32768) && (y > -32768) && (y < 32768) && (z >= 0) && (z < 10000)) {
+                            pParty->pos = Vec3f(x, y, z);
+                            pParty->uFallStartZ = z;
+                            continue;
+                        }
+                    }
+                    pAudioPlayer->playUISound(SOUND_error);
+                    status_string = "Can't jump to that location!";
+                }
+                engine->_statusBar->setEvent(status_string);
+                continue;
+            }
+            case UIMSG_CastQuickSpell:
+            case UIMSG_CastQuickSpellAtActor: {
+                if (engine->IsUnderwater()) {
+                    engine->_statusBar->setEvent(LSTR_YOU_CAN_NOT_DO_THAT_WHILE_YOU_ARE);
+                    pAudioPlayer->playUISound(SOUND_error);
+                    continue;
+                }
+                if (!pParty->hasActiveCharacter() || pParty->activeCharacter().timeToRecovery) {
+                    continue;
+                }
+                Pid target = uMessage == UIMSG_CastQuickSpellAtActor ? Pid(OBJECT_Actor, uMessageParam) : Pid();
+                SpellId quickSpell = pParty->activeCharacter().uQuickSpell;
+                pushSpellOrRangedAttack(isMm6() ? mm6SpellEffect(quickSpell) : quickSpell, pParty->activeCharacterIndex(),
+                                        CombinedSkillValue::none(), ON_CAST_CastViaQuickSpell, target, isMm6() ? quickSpell : SPELL_NONE);
+                continue;
+            }
+
+            case UIMSG_CastSpell_TargetActorBuff:
+            case UIMSG_CastSpell_TargetActor: {
+                Pid pid = engine->PickMouseForTargeting().pid;
+                if (pid.type() == OBJECT_Actor) {
+                    spellTargetPicked(pid, -1);
+                    closeTargetedSpellWindow();
+                }
+                continue;
+            }
+            case UIMSG_1C:
+                assert(false);
+                if (!pParty->hasActiveCharacter() || current_screen_type != SCREEN_GAME)
+                    continue;
+                assert(false);  // ptr_507BC8 = GUIWindow::Create(0, 0,
+                                // window->GetWidth(), window->GetHeight(),
+                                // WINDOW_68, uMessageParam, 0);
+                current_screen_type = SCREEN_19;
+                gameTimer->setPaused(true);
+                continue;
+            case UIMSG_STEALFROMACTOR:
+                if (!pParty->hasActiveCharacter()) continue;
+                if (!pParty->bTurnBasedModeOn) {
+                    if (pActors[uMessageParam].aiState == AIState::Dead)
+                        pActors[uMessageParam].LootActor();
+                    else
+                        Actor::StealFrom(uMessageParam);
+                    continue;
+                }
+                if (pTurnEngine->turn_stage == TE_WAIT ||
+                    pTurnEngine->turn_stage == TE_MOVEMENT)
+                    continue;
+                if (!(pTurnEngine->flags & TE_HAVE_PENDING_ACTIONS)) {
+                    if (pActors[uMessageParam].aiState == AIState::Dead)
+                        pActors[uMessageParam].LootActor();
+                    else
+                        Actor::StealFrom(uMessageParam);
+                }
+                continue;
+
+            case UIMSG_Attack:
+                if (!pParty->hasActiveCharacter()) continue;
+                if (!pParty->bTurnBasedModeOn) {
+                    Character::_42ECB5_CharacterAttacksActor();
+                    continue;
+                }
+                if (pTurnEngine->turn_stage == TE_WAIT ||
+                    pTurnEngine->turn_stage == TE_MOVEMENT)
+                    continue;
+                if (!(pTurnEngine->flags & TE_HAVE_PENDING_ACTIONS))
+                    Character::_42ECB5_CharacterAttacksActor();
+                continue;
+            case UIMSG_ExitRest:
+                new OnCancel(pButton_RestUI_Exit->rect.topLeft(), {0, 0}, pButton_RestUI_Exit, localization->str(LSTR_EXIT_REST));
+                continue;
+            case UIMSG_Wait5Minutes:
+                if (currentRestType == REST_HEAL) {
+                    engine->_statusBar->setEvent(LSTR_YOU_ARE_ALREADY_RESTING);
+                    pAudioPlayer->playUISound(SOUND_error);
+                    continue;
+                }
+                new OnButtonClick(pButton_RestUI_Wait5Minutes->rect.topLeft(), {0, 0}, pButton_RestUI_Wait5Minutes,
+                    localization->str(LSTR_WAIT_5_MINUTES));
+                currentRestType = REST_WAIT;
+                remainingRestTime = Duration::fromMinutes(5);
+                continue;
+            case UIMSG_Wait1Hour:
+                if (currentRestType == REST_HEAL) {
+                    engine->_statusBar->setEvent(LSTR_YOU_ARE_ALREADY_RESTING);
+                    pAudioPlayer->playUISound(SOUND_error);
+                    continue;
+                }
+                new OnButtonClick(pButton_RestUI_Wait1Hour->rect.topLeft(), {0, 0}, pButton_RestUI_Wait1Hour,
+                    localization->str(LSTR_WAIT_1_HOUR));
+                currentRestType = REST_WAIT;
+                remainingRestTime = Duration::fromHours(1);
+                continue;
+            case UIMSG_RentRoom: {
+                HouseId tavern = static_cast<HouseId>(uMessageParam);
+                assert(isTavern(tavern));
+
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_Rest>();
+
+                remainingRestTime = timeUntilDawn() + Duration::fromHours(1);
+                if (tavern == HOUSE_TAVERN_DEYJA || tavern == HOUSE_TAVERN_PIT || tavern == HOUSE_TAVERN_MOUNT_NIGHON) {
+                    remainingRestTime = remainingRestTime + Duration::fromHours(12);
+                }
+                currentRestType = REST_HEAL;
+                pParty->restAndHeal();
+                pParty->days_played_without_rest = 0;
+                for (Character &character : pParty->pCharacters) {
+                    character.conditions.set(CONDITION_SLEEP, Time::fromTicks(1));
+                }
+                continue;
+            }
+            case UIMSG_RestWindow:
+                engine->_messageQueue->clear();
+                // toggle
+                //if (current_screen_type == SCREEN_REST) {
+                //    engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                //    continue;
+                //}
+                if (current_screen_type != SCREEN_GAME) continue;
+                closeTargetedSpellWindow();
+
+                if (CheckActors_proximity()) {
+                    if (pParty->bTurnBasedModeOn) {
+                        engine->_statusBar->setEvent(LSTR_YOU_CANT_REST_IN_TURN_BASED_MODE);
+                        continue;
+                    }
+
+                    if (pParty->uFlags & (PARTY_FLAG_AIRBORNE | PARTY_FLAG_STANDING_ON_WATER)) // airbourne or on water
+                        engine->_statusBar->setEvent(LSTR_YOU_CANT_REST_HERE);
+                    else
+                        engine->_statusBar->setEvent(LSTR_THERE_ARE_HOSTILE_ENEMIES_NEAR);
+
+                    if (!pParty->hasActiveCharacter()) continue;
+                    pParty->activeCharacter().playReaction(SPEECH_CANT_REST_HERE);
+                    continue;
+                }
+                if (pParty->bTurnBasedModeOn) {
+                    engine->_statusBar->setEvent(LSTR_YOU_CANT_REST_IN_TURN_BASED_MODE);
+                    continue;
+                }
+
+                if (!(pParty->uFlags & (PARTY_FLAG_AIRBORNE | PARTY_FLAG_STANDING_ON_WATER))) {
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_Rest>();
+                    continue;
+                } else {
+                    if (pParty->uFlags & PARTY_FLAG_AIRBORNE)
+                        MM_TRACE("Party is airborne");
+                    if (pParty->uFlags & PARTY_FLAG_STANDING_ON_WATER)
+                        MM_TRACE("Party on water");
+                }
+
+                if (pParty->bTurnBasedModeOn) {
+                    engine->_statusBar->setEvent(LSTR_YOU_CANT_REST_IN_TURN_BASED_MODE);
+                    continue;
+                }
+
+                if (pParty->uFlags & (PARTY_FLAG_AIRBORNE | PARTY_FLAG_STANDING_ON_WATER))
+                    engine->_statusBar->setEvent(LSTR_YOU_CANT_REST_HERE);
+                else
+                    engine->_statusBar->setEvent(LSTR_THERE_ARE_HOSTILE_ENEMIES_NEAR);
+
+                if (!pParty->hasActiveCharacter()) continue;
+                pParty->activeCharacter().playReaction(SPEECH_CANT_REST_HERE);
+                continue;
+            case UIMSG_Rest8Hour:
+                if (currentRestType != REST_NONE) {
+                    engine->_statusBar->setEvent(LSTR_YOU_ARE_ALREADY_RESTING);
+                    pAudioPlayer->playUISound(SOUND_error);
+                    continue;
+                }
+                if (pParty->GetFood() < foodRequiredToRest) {
+                    engine->_statusBar->setEvent(LSTR_YOU_DONT_HAVE_ENOUGH_FOOD_TO_REST);
+                    if (pParty->hasActiveCharacter() && pParty->activeCharacter().CanAct()) {
+                        pParty->activeCharacter().playReaction(SPEECH_NOT_ENOUGH_FOOD);
+                    }
+                } else {
+                    for (Character &character : pParty->pCharacters) {
+                        character.conditions.set(CONDITION_SLEEP, pParty->GetPlayingTime());
+                    }
+                    MapId mapIdx = engine->_currentLoadedMapId;
+                    assert(mapIdx != MAP_INVALID);
+                    // Was this, which made exactly zero sense:
+                    // if (mapIdx == MAP_INVALID)
+                    //    mapIdx = static_cast<MAP_TYPE>(grng->random(pMapStats->uNumMaps + 1));
+                    MapData *mapData = &pMapTable->pInfos[mapIdx];
+
+                    // Encounters when resting
+                    if ((grng->random(100) + 1) <= mapData->encounterChance && !engine->config->debug.NoActors.value()) {
+                        int encRand = grng->random(100) + 1;
+                        int encIndex = 0; // 1-3 index for which monster to spawn
+
+                        if (encRand <= mapData->encounter1Chance) {
+                            encIndex = 1;
+                        } else if (encRand <= (mapData->encounter1Chance + mapData->encounter2Chance)) {
+                            encIndex = 2;
+                        } else {
+                            encIndex = 3;
+                        }
+
+                        if (!SpawnEncounterMonsters(mapData, encIndex))
+                            encIndex = 0;
+
+                        if (encIndex) {
+                            pParty->pCharacters[grng->random(pParty->pCharacters.size())].conditions.reset(CONDITION_SLEEP);
+                            Rest(Duration::fromHours(1) + Duration::fromMinutes(grng->random(6)));
+                            remainingRestTime = Duration();
+                            currentRestType = REST_NONE;
+
+                            engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                            engine->_statusBar->setEvent(LSTR_ENCOUNTER);
+                            pAudioPlayer->playUISound(SOUND_encounter);
+                            continue;
+                        }
+                    }
+
+                    pParty->TakeFood(foodRequiredToRest);
+                    remainingRestTime = Duration::fromHours(8);
+                    currentRestType = REST_HEAL;
+                    pParty->restAndHeal();
+                    pParty->days_played_without_rest = 0;
+                    for (Character &character : pParty->pCharacters) {
+                        character.conditions.set(CONDITION_SLEEP, Time::fromTicks(1));
+                    }
+                }
+                continue;
+            case UIMSG_WaitTillDawn:
+                if (currentRestType == REST_HEAL) {
+                    engine->_statusBar->setEvent(LSTR_YOU_ARE_ALREADY_RESTING);
+                    pAudioPlayer->playUISound(SOUND_error);
+                    continue;
+                }
+                new OnButtonClick(pButton_RestUI_WaitUntilDawn->rect.topLeft(), {0, 0}, pButton_RestUI_WaitUntilDawn,
+                                   localization->str(LSTR_WAIT_UNTIL_DAWN));
+                currentRestType = REST_WAIT;
+                remainingRestTime = timeUntilDawn();
+                continue;
+
+            case UIMSG_ClickInstallRemoveQuickSpellBtn: {
+                if (!isMm6()) // MM6 closes the book right away, the button is gone before the click could be drawn.
+                    new OnButtonClick(pBtn_InstallRemoveSpell->rect.topLeft(), {0, 0}, pBtn_InstallRemoveSpell);
+                if (!pParty->hasActiveCharacter())
+                    continue;
+                Character *character = &pParty->activeCharacter();
+                if (spellbookSelectedSpell == SPELL_NONE || spellbookSelectedSpell == character->uQuickSpell) {
+                    character->uQuickSpell = SPELL_NONE;
+                    spellbookSelectedSpell = SPELL_NONE;
+                    pAudioPlayer->playUISound(SOUND_fizzle);
+                    continue;
+                }
+                pParty->activeCharacter().uQuickSpell = spellbookSelectedSpell;
+                if (pParty->hasActiveCharacter()) {
+                    character->playReaction(SPEECH_SET_QUICK_SPELL);
+                }
+                if (isMm6())
+                    engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0); // MM6 closes the book here.
+                continue;
+            }
+
+            case UIMSG_SpellBook_PressTab: {
+                if (!pParty->hasActiveCharacter()) continue;
+                std::array<MagicSchool, 10> spellbookPages = {};
+                int skill_count = 0;
+                int uAction = 0;
+                for (MagicSchool page : allMagicSchools()) {
+                    Skill skill = skillForMagicSchool(page);
+                    if (pParty->activeCharacter().pActiveSkills[skill] || engine->config->debug.AllMagic.value()) {
+                        if (pParty->activeCharacter().lastOpenedSpellbookPage == page)
+                            uAction = skill_count;
+                        spellbookPages[skill_count++] = page;
+                    }
+                }
+                if (hasMm8RacialSpellbookPage(pParty->activeCharacter())) {
+                    if (pParty->activeCharacter().lastOpenedSpellbookPage == MAGIC_SCHOOL_MM8_RACIAL)
+                        uAction = skill_count;
+                    spellbookPages[skill_count++] = MAGIC_SCHOOL_MM8_RACIAL;
+                }
+                if (!skill_count) {
+                    pAudioPlayer->playUISound(vrng->randomBool() ? SOUND_TurnPage2 : SOUND_TurnPage1);
+                } else {
+                    if (keyboardInputHandler->IsSpellBackcycleToggled()) {
+                        --uAction;
+                        if (uAction < 0)
+                            uAction = skill_count - 1;
+                    } else {
+                        ++uAction;
+                        if (uAction >= skill_count)
+                            uAction = 0;
+                    }
+                    (dynamic_cast<GUIWindow_Spellbook*>(pGUIWindow_CurrentMenu.get()))->openSpellbookPage(spellbookPages[uAction]);
+                }
+                continue;
+            }
+            case UIMSG_OpenSpellbookPage:
+                if (pTurnEngine->turn_stage == TE_MOVEMENT ||
+                    !pParty->hasActiveCharacter() ||
+                    static_cast<MagicSchool>(uMessageParam) == pParty->activeCharacter().lastOpenedSpellbookPage) {
+                    continue;
+                }
+                (dynamic_cast<GUIWindow_Spellbook*>(pGUIWindow_CurrentMenu.get()))->openSpellbookPage(static_cast<MagicSchool>(uMessageParam));
+                continue;
+            case UIMSG_SelectSpell: {
+                if (pTurnEngine->turn_stage == TE_MOVEMENT) {
+                    continue;
+                }
+                if (!pParty->hasActiveCharacter()) {
+                    continue;
+                }
+
+                Character *character = &pParty->activeCharacter();
+                SpellId selectedSpell = static_cast<SpellId>(uMessageParam);
+                if (character->knowsSpell(selectedSpell) || engine->config->debug.AllMagic.value()) {
+                    if (spellbookSelectedSpell == selectedSpell) {
+                        pGUIWindow_CurrentMenu = nullptr;  // spellbook close
+                        gameTimer->setPaused(false);
+                        current_screen_type = SCREEN_GAME;
+                        // Processing must happen on next frame because need to close spell book and update
+                        // drawing object list which is used to count actors for some spells
+                        engine->_messageQueue->addMessageNextFrame(UIMSG_CastSpellFromBook, std::to_underlying(selectedSpell), pParty->activeCharacterIndex());
+                    } else {
+                        spellbookSelectedSpell = selectedSpell;
+                    }
+                }
+                continue;
+            }
+
+            case UIMSG_CastSpellFromBook:
+                if (pTurnEngine->turn_stage != TE_MOVEMENT) {
+                    SpellId bookSpell = static_cast<SpellId>(uMessageParam);
+                    pushSpellOrRangedAttack(isMm6() ? mm6SpellEffect(bookSpell) : bookSpell, uMessageParam2, CombinedSkillValue::none(), 0,
+                                            Pid(), isMm6() ? bookSpell : SPELL_NONE);
+                }
+                continue;
+
+            case UIMSG_SpellScrollUse:
+                if (pTurnEngine->turn_stage != TE_MOVEMENT) {
+                    SpellId scrollSpell = static_cast<SpellId>(uMessageParam);
+                    if (isMm6())
+                        pushScrollSpell(mm6SpellEffect(scrollSpell), uMessageParam2, scrollSpell);
+                    else
+                        pushScrollSpell(scrollSpell, uMessageParam2);
+                }
+                continue;
+
+            case UIMSG_SpellBookWindow:
+                if (pTurnEngine->turn_stage == TE_MOVEMENT) {
+                    continue;
+                }
+                if (engine->IsUnderwater()) {
+                    engine->_statusBar->setEvent(LSTR_YOU_CAN_NOT_DO_THAT_WHILE_YOU_ARE);
+                    pAudioPlayer->playUISound(SOUND_error);
+                } else {
+                    engine->_messageQueue->clear();
+                    if (pParty->hasActiveCharacter()) {
+                        if (!pParty->activeCharacter().timeToRecovery) {
+                            // toggle
+                            if (current_screen_type == SCREEN_SPELL_BOOK) {
+                                engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                                continue;
+                            }
+                            // cant open screen - talking or in shop or map transition
+                            if (!IsWindowSwitchable()) {
+                                continue;
+                            } else {
+                                // close out current window
+                                back_to_game();
+                                onEscape();
+                                engine->_statusBar->clearAll();
+                            }
+                            // open window
+                            new OnButtonClick({ 476, 450 }, { 0, 0 }, pBtn_CastSpell);
+                            pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_Spellbook>();
+                            continue;
+                        }
+                    }
+                }
+                continue;
+            case UIMSG_QuickReference:
+                engine->_messageQueue->clear();
+                // toggle
+                if (current_screen_type == SCREEN_QUICK_REFERENCE) {
+                    engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                    continue;
+                }
+                // cant open screen - talking or in shop or map transition
+                if (!IsWindowSwitchable()) {
+                    continue;
+                } else {
+                    // close out current window
+                    back_to_game();
+                    onEscape();
+                    engine->_statusBar->clearAll();
+                }
+                // open window
+                new OnButtonClick({560, 450}, {0, 0}, pBtn_QuickReference);
+                pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_QuickReference>();
+                continue;
+            case UIMSG_GameMenuButton:
+                if (current_screen_type != SCREEN_GAME) {
+                    pGUIWindow_CurrentMenu = nullptr;
+                    gameTimer->setPaused(false);
+                    current_screen_type = SCREEN_GAME;
+                }
+
+                if (gamma_preview_image) {
+                    gamma_preview_image->release();
+                    gamma_preview_image = nullptr;
+                }
+                gamma_preview_image = GraphicsImage::Create(render->MakeViewportScreenshot(gammaPreviewSize().w, gammaPreviewSize().h));
+
+                new OnButtonClick({602, 450}, {0, 0}, pBtn_GameSettings);
+                engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0);
+                continue;
+            case UIMSG_ClickAwardScrollBar:
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->clickAwardsScroll(mouse->position().y);
+                pAudioPlayer->playUISound(SOUND_StartMainChoice02);
+                continue;
+            case UIMSG_ClickAwardsUpBtn:
+                new OnButtonClick3(WINDOW_CharacterWindow_Awards, pBtn_Up->rect.topLeft(), {0, 0}, pBtn_Up);
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->clickAwardsUp();
+                continue;
+            case UIMSG_ClickAwardsDownBtn:
+                new OnButtonClick3(WINDOW_CharacterWindow_Awards, pBtn_Down->rect.topLeft(), {0, 0}, pBtn_Down);
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->clickAwardsDown();
+                continue;
+            case UIMSG_ChangeDetaliz:
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->ToggleRingsOverlay();
+                continue;
+            case UIMSG_ClickPaperdoll:
+                OnPaperdollLeftClick();
+                continue;
+            case UIMSG_SkillUp:
+            {
+                Skill skill = static_cast<Skill>(uMessageParam);
+                Character *character = &pParty->activeCharacter();
+                CombinedSkillValue skillValue = character->getSkillValue(skill);
+                int cost = skillValue.level() + 1;
+
+                if (character->uSkillPoints < cost) {
+                    engine->_statusBar->setEvent(LSTR_YOU_DONT_HAVE_ENOUGH_SKILL_POINTS);
+                } else {
+                    if (skillValue.level() < skills_max_level[skill]) {
+                        character->setSkillValue(skill, CombinedSkillValue::increaseLevel(skillValue));
+                        character->uSkillPoints -= cost;
+                        character->playReaction(SPEECH_SKILL_INCREASE);
+                        pAudioPlayer->playUISound(SOUND_quest);
+                    } else {
+                        engine->_statusBar->setEvent(LSTR_YOU_HAVE_ALREADY_MASTERED_THIS_SKILL);
+                    }
+                }
+                continue;
+            }
+            case UIMSG_ClickStatsBtn:
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->ShowStatsTab();
+                continue;
+            case UIMSG_ClickSkillsBtn:
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->ShowSkillsTab();
+                continue;
+            case UIMSG_ClickInventoryBtn:
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->ShowInventoryTab();
+                continue;
+            case UIMSG_ClickAwardsBtn:
+                ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->ShowAwardsTab();
+                continue;
+            case UIMSG_ClickExitCharacterWindowBtn:
+                new OnCancel2(pCharacterScreen_ExitBtn->rect.topLeft(), {0, 0}, pCharacterScreen_ExitBtn);
+                continue;
+            case UIMSG_ClickBooksBtn:
+                assert(uMessageParam >= std::to_underlying(BOOK_BUTTON_FIRST) && uMessageParam <= std::to_underlying(BOOK_BUTTON_LAST) && "Invalid book button action");
+                ((GUIWindow_Book *)pGUIWindow_CurrentMenu.get())->bookButtonClicked(BookButtonAction(uMessageParam));
+                continue;
+            case UIMSG_SelectCharacter:
+                engine->_messageQueue->clear();
+                GameUI_OnPlayerPortraitLeftClick(uMessageParam);
+                continue;
+            case UIMSG_CHEST_ClickItem:
+                if (current_screen_type == SCREEN_CHEST_INVENTORY) {
+                    pParty->activeCharacter().OnInventoryLeftClick();
+                    continue;
+                }
+                Chest::OnChestLeftClick();
+                continue;
+            case UIMSG_InventoryLeftClick:
+                pParty->activeCharacter().OnInventoryLeftClick();
+                continue;
+            case UIMSG_MouseLeftClickInGame:
+                engine->_messageQueue->clear();
+                engine->_messageQueue->addMessageCurrentFrame(UIMSG_MouseLeftClickInScreen, 0, 0);
+                continue;
+            case UIMSG_MouseLeftClickInScreen:
+                engine->_messageQueue->clear();
+                engine->onGameViewportClick();
+                continue;
+            case UIMSG_F:  // what event?
+                assert(false);
+                //pButton2 = (GUIButton *)(uint16_t)vis->get_picked_object_zbuf_val().object_pid;
+                assert(false);  // GUIWindow::Create(0, 0, 0, 0, WINDOW_F, (int)pButton2, 0);
+                continue;
+            case UIMSG_54:  // what event?
+                assert(false);
+                //pButton2 = (GUIButton *)uMessageParam;
+                assert(false);  // GUIWindow::Create(0, 0, 0, 0, WINDOW_22, (int)pButton2, 0);
+                continue;
+            case UIMSG_Game_Action:
+                engine->_messageQueue->clear();
+                // if currently in a chest
+                if (current_screen_type == SCREEN_CHEST) {
+                    Chest::GrabItem(keyboardInputHandler->IsTakeAllToggled());
+                } else {
+                    onPressSpace();
+                }
+                continue;
+            case UIMSG_ClickZoomInBtn:
+                if (!(current_screen_type == SCREEN_GAME)) continue;
+                new OnButtonClick({519, 136}, {0, 0}, pBtn_ZoomIn);
+
+                setMinimapZoom(viewparams->uMinimapZoom * 2);
+
+                break;
+            case UIMSG_ClickZoomOutBtn:
+                if (!(current_screen_type == SCREEN_GAME)) continue;
+                new OnButtonClick({574, 136}, {0, 0}, pBtn_ZoomOut);
+
+                setMinimapZoom(viewparams->uMinimapZoom / 2);
+
+                break;
+
+            case UIMSG_OpenInventory: {
+                if (pParty->hasActiveCharacter()) {
+                    pGUIWindow_CurrentMenu = std::make_unique<GUIWindow_CharacterRecord>(pParty->activeCharacterIndex(), SCREEN_CHARACTERS);
+                    ((GUIWindow_CharacterRecord *)pGUIWindow_CurrentMenu.get())->ShowInventoryTab();
+                }
+                break;
+            }
+            case UIMSG_QuickSave:
+                if (isArenaMap(engine->_currentLoadedMapId)) {
+                    engine->_statusBar->setEvent(LSTR_NO_SAVING_IN_THE_ARENA);
+                    pAudioPlayer->playUISound(SOUND_error);
+                } else {
+                    quickSaveGame();
+                }
+                continue;
+            case UIMSG_QuickLoad:
+                quickLoadGame();
+                continue;
+            default:
+                MM_WARNING("Game::processQueuedMessages - Unhandled message type: {}", static_cast<int>(uMessage));
+                continue;
+        }
+    }
+
+    engine->_messageQueue->swapFrames();
+
+    if (AfterEnchClickEventId != UIMSG_0) {
+        AfterEnchClickEventTimeout = std::max(0_ticks, AfterEnchClickEventTimeout - gameTimer->dt());
+        if (!AfterEnchClickEventTimeout) {
+            engine->_messageQueue->addMessageCurrentFrame(AfterEnchClickEventId, AfterEnchClickEventSecondParam, 0);
+            AfterEnchClickEventId = UIMSG_0;
+            AfterEnchClickEventSecondParam = 0;
+        }
+    }
+    CastSpellInfoHelpers::castSpell();
+}
+
+//----- (0046A14B) --------------------------------------------------------
+void Game::onPressSpace() {
+    Pid pid = engine->PickKeyboard(engine->config->gameplay.KeyboardInteractionDepth.value(),
+                                    &vis_decoration_noevent_filter, &vis_door_filter).pid;
+    if (pid) {
+        DoInteractionWithTopmostZObject(pid);
+    }
+}
+
+void Game::gameLoop() {
+    bool bLoading;
+    MapId mapid;
+
+    bLoading = sCurrentMenuID == MENU_LoadingProcInMainMenu;
+    SetCurrentMenuID(MENU_NONE);
+    if (bLoading) {
+        uGameState = GAME_STATE_PLAYING;
+        assert(!engine->_pendingLoadFileName.empty());
+        loadGame(std::exchange(engine->_pendingLoadFileName, {}));
+    }
+
+    extern bool use_music_folder;
+    GameUI_LoadPlayerPortraitsAndVoices();
+    pIcons_LOD->reserveLoadedTextures();
+    // pAudioPlayer->SetMusicVolume(engine->config->music_level);
+
+    while (true) {
+        engine->_messageQueue->clear();
+
+        pPartyActionQueue->uNumActions = 0;
+
+        pTurnEngine->End(false);
+        pParty->bTurnBasedModeOn = false;  // Make sure turn engine and party turn based mode flag are in sync.
+
+        DoPrepareWorld(bLoading, 1);
+        gameTimer->setPaused(false);
+        dword_6BE364_game_settings_1 |= GAME_SETTINGS_0080_SKIP_USER_INPUT_THIS_FRAME;
+        // uGame_if_0_else_ui_id__11_save__else_load__8_drawSpellInfoPopup__22_final_window__26_keymapOptions__2_options__28_videoOptions
+        // = 0;
+        current_screen_type = SCREEN_GAME;
+
+        bool game_finished = false;
+        do {
+            MessageLoopWithWait();
+
+            // Development hooks for testing without clicking through the game, they fire once, a second into the
+            // game: OE_DEV_MAP=<file> moves the party to another map, OE_DEV_HOUSE=<id> enters a house, OE_DEV_DOORS=1 logs
+            // the house doors of the current outdoor map, OE_DEV_DECOR=1 the interactive decorations, OE_DEV_AWARDS=<id>,<id>,... gives the awards to the whole party,
+            // OE_DEV_POS=<x>,<y>,<yaw> moves the party, OE_DEV_HOURS=<n> moves the clock forward. OE_DEV_EVENT=<id> runs a local event two seconds later, after
+            // OE_DEV_MAP has loaded. OE_DEV_EXP=<n>, OE_DEV_REP=<n> and OE_DEV_GOLD=<n> set experience, MM6 reputation and gold, OE_DEV_TALK=1 talks to
+            // the nearest NPC, OE_DEV_ITEMS=<id>,<id>,... gives items (MM6 ids in MM6) to the first character, OE_DEV_SPELL=<id>[:<mastery>] makes it
+            // cast a spell at skill 30, master by default, OE_DEV_SUMMON=<monster id> puts a monster in front of the party,
+            // OE_DEV_NEAR_MONSTER=1 moves the party next to the nearest monster, OE_DEV_SPELL_SWEEP=<id> casts every spell from <id> on,
+            // OE_DEV_MAP_TOUR=<n> loads every map in turn, starting with the n-th. OE_DEV_ROSTER=<id>,<id>,... sends MM8 roster
+            // characters to the Adventurer's Inn. OE_DEV_OFFHAND=<id> puts an item into the off hand of the first character.
+            static int devHookFrames = 0;
+            if (current_screen_type == SCREEN_GAME && ++devHookFrames == 60) {
+                if (const char *devMap = std::getenv("OE_DEV_MAP"); devMap && *devMap)
+                    startMapTransition(MapDestination(pMapTable->GetMapInfo(devMap), MAP_START_POINT_PARTY));
+                if (std::getenv("OE_DEV_DOORS") && uCurrentlyLoadedLevelType == LEVEL_OUTDOOR) {
+                    MM_WARNING("Dev: party at {} {} {} yaw {}", pParty->pos.x, pParty->pos.y, pParty->pos.z, pParty->_viewYaw);
+                    for (BSPModel &model : pOutdoor->pBModels) {
+                        for (BLVFace &face : model.faces) {
+                            if (!face.eventId || !engine->_localEventMap.hasEvent(face.eventId))
+                                continue;
+                            for (const EvtInstruction &ir : engine->_localEventMap.function(face.eventId)) {
+                                if (ir.opcode == EVENT_SpeakInHouse) {
+                                    Vec3f c = face.boundingBox.center();
+                                    MM_WARNING("Dev: door of house {} at {} {} {} dist {}", std::to_underlying(ir.data.house_id), c.x, c.y, c.z, (c - pParty->pos).length());
+                                }
+                            }
+                        }
+                    }
+                }
+                if (std::getenv("OE_DEV_DECOR")) {
+                    for (const LevelDecoration &decoration : pLevelDecorations) {
+                        if (decoration.uEventID || !const_cast<LevelDecoration &>(decoration).IsInteractive())
+                            continue;
+                        int eventId = globalEventForDecorationState(engine->_persistentVariables.decorVars[decoration.eventVarId]);
+                        MM_WARNING("Dev: decoration {} at {} {} event {} '{}'", std::to_underlying(decoration.uDecorationDescID), decoration.vPosition.x,
+                                   decoration.vPosition.y, eventId, pNPCTopics[eventId].pTopic);
+                    }
+                }
+                if (const char *devAwards = std::getenv("OE_DEV_AWARDS"); devAwards && *devAwards) {
+                    for (std::string_view award : split(devAwards).by(','))
+                        for (Character &character : pParty->pCharacters)
+                            character._achievedAwardsBits.set(static_cast<AwardId>(std::atoi(std::string(award).c_str())));
+                }
+                if (const char *devPos = std::getenv("OE_DEV_POS"); devPos && *devPos) {
+                    std::vector<std::string_view> parts = split(devPos).by(',');
+                    if (parts.size() == 3) {
+                        auto number = [](std::string_view text) { return std::atoi(std::string(text).c_str()); };
+                        placeParty(PartyPlacement(Vec3f(number(parts[0]), number(parts[1]), 0), number(parts[2]), 0, 0));
+                    }
+                }
+                if (const char *devHours = std::getenv("OE_DEV_HOURS"); devHours && *devHours)
+                    pParty->GetPlayingTime() += Duration::fromHours(std::atoi(devHours));
+                if (const char *devHouse = std::getenv("OE_DEV_HOUSE"); devHouse && *devHouse) {
+                    if (HouseId house = static_cast<HouseId>(std::atoi(devHouse)); enterHouse(house))
+                        createHouseUI(uCurrentHouse_Animation == houseTable[static_cast<HouseId>(167)].uAnimationID && isMm6() ? static_cast<HouseId>(167) : house);
+                }
+            }
+            if (current_screen_type == SCREEN_GAME && devHookFrames == 59) {
+                if (const char *devExp = std::getenv("OE_DEV_EXP"); devExp && *devExp)
+                    for (Character &character : pParty->pCharacters)
+                        character.experience = std::atoi(devExp);
+                if (const char *devRep = std::getenv("OE_DEV_REP"); devRep && *devRep)
+                    pParty->mm6Reputation = std::atoi(devRep);
+                if (const char *devGold = std::getenv("OE_DEV_GOLD"); devGold && *devGold)
+                    pParty->SetGold(std::atoi(devGold));
+                if (const char *devSummon = std::getenv("OE_DEV_SUMMON"); devSummon && *devSummon)
+                    Actor::Arena_summon_actor(static_cast<MonsterId>(std::atoi(devSummon)),
+                                              pParty->pos + Vec3f::fromPolar(400, pParty->_viewYaw, 0) + Vec3f(0, 0, 10));
+                if (const char *devRoster = std::getenv("OE_DEV_ROSTER"); devRoster && *devRoster && isMm8())
+                    for (std::string_view id : split(devRoster).by(','))
+                        sendMm8RosterCharacterToInn(std::atoi(std::string(id).c_str()));
+                if (const char *devOffHand = std::getenv("OE_DEV_OFFHAND"); devOffHand && *devOffHand)
+                    pParty->pCharacters[0].inventory.tryEquip(ITEM_SLOT_OFF_HAND, Item(static_cast<ItemId>(std::atoi(devOffHand))));
+                if (const char *devItems = std::getenv("OE_DEV_ITEMS"); devItems && *devItems)
+                    for (std::string_view item : split(devItems).by(','))
+                        pParty->pCharacters[0].inventory.tryAdd(Item(isMm6() ? itemIdFromMm6(std::atoi(std::string(item).c_str())) :
+                                                                              static_cast<ItemId>(std::atoi(std::string(item).c_str()))));
+            }
+            if (current_screen_type == SCREEN_GAME && devHookFrames == 180 && std::getenv("OE_DEV_TALK")) {
+                int nearest = -1;
+                for (int i = 0; i < pActors.size(); i++)
+                    if (pActors[i].npcId && pActors[i].CanAct() &&
+                        (nearest < 0 || (pActors[i].pos - pParty->pos).length() < (pActors[nearest].pos - pParty->pos).length()))
+                        nearest = i;
+                if (nearest >= 0)
+                    engine->_messageQueue->addMessageCurrentFrame(UIMSG_StartNPCDialogue, nearest, 0);
+            }
+            if (current_screen_type == SCREEN_GAME && devHookFrames == 90 && std::getenv("OE_DEV_NEAR_MONSTER")) {
+                int nearest = -1;
+                for (int i = 0; i < pActors.size(); i++)
+                    if (pActors[i].CanAct() && !pActors[i].IsPeasant() && !pActors[i].npcId &&
+                        (nearest < 0 || (pActors[i].pos - pParty->pos).length() < (pActors[nearest].pos - pParty->pos).length()))
+                        nearest = i;
+                if (nearest >= 0) {
+                    Vec3f dir = pParty->pos - pActors[nearest].pos;
+                    dir.z = 0;
+                    Vec3f pos = pActors[nearest].pos + dir * (400.0f / std::max(1.0f, dir.length()));
+                    int yaw = TrigLUT.atan2(pActors[nearest].pos.x - pos.x, pActors[nearest].pos.y - pos.y);
+                    placeParty(PartyPlacement(pos, yaw, 0, 0));
+                    MM_WARNING("Dev: near monster {} ({}) at {} {} {}", nearest, pActors[nearest].monsterInfo.name, pos.x, pos.y, pos.z);
+                }
+            }
+            static int devTourFrames = 0;
+            static int devTourDialogueFrames = 0;
+            if (current_screen_type != SCREEN_GAME && std::getenv("OE_DEV_MAP_TOUR") && ++devTourDialogueFrames % 60 == 0)
+                engine->_messageQueue->addMessageCurrentFrame(UIMSG_Escape, 0, 0); // Maps that greet the party with a dialogue.
+            if (current_screen_type == SCREEN_GAME && std::getenv("OE_DEV_MAP_TOUR") && ++devTourFrames % 150 == 0) {
+                static int devTourIndex = std::max(0, std::atoi(std::getenv("OE_DEV_MAP_TOUR")) - 1);
+                std::vector<MapId> maps;
+                for (MapId map : allMaps())
+                    if (!pMapTable->pInfos[map].fileName.empty())
+                        maps.push_back(map);
+                if (devTourIndex < maps.size()) {
+                    MapId map = maps[devTourIndex++];
+                    MM_WARNING("Dev: map tour {} {}", devTourIndex, pMapTable->pInfos[map].fileName);
+                    startMapTransition(MapDestination(map, MAP_START_POINT_PARTY));
+                }
+            }
+            const char *devSpell = std::getenv("OE_DEV_SPELL");
+            if (current_screen_type == SCREEN_GAME && devHookFrames == 120 && devSpell && *devSpell) {
+                SpellId spell = static_cast<SpellId>(std::atoi(devSpell));
+                const char *devMastery = std::strchr(devSpell, ':');
+                Mastery mastery = devMastery ? static_cast<Mastery>(std::atoi(devMastery + 1)) : MASTERY_MASTER;
+                pushSpellOrRangedAttack(isMm6() ? mm6SpellEffect(spell) : spell, 0, CombinedSkillValue(30, mastery), 0, Pid(), isMm6() ? spell : SPELL_NONE);
+            }
+            static int devSweepFrames = 0;
+            const char *devSweep = std::getenv("OE_DEV_SPELL_SWEEP");
+            if (current_screen_type == SCREEN_GAME && devHookFrames > 120 && devSweep && ++devSweepFrames % 40 == 0) {
+                static int devSweepSpell = std::atoi(devSweep);
+                // Enchant item, town portal, Lloyd's beacon and golden touch open a window.
+                while (devSweepSpell == 29 || devSweepSpell == 31 || devSweepSpell == 33 || devSweepSpell == 79 ||
+                       (devSweepSpell > 99 && devSweepSpell < std::to_underlying(SPELL_FIRST_MM8_RACIAL)))
+                    devSweepSpell++;
+                if (devSweepSpell <= (isMm8() ? std::to_underlying(SPELL_LAST_MM8_RACIAL) : 99)) {
+                    SpellId spell = static_cast<SpellId>(devSweepSpell++);
+                    MM_WARNING("Dev: sweep casts spell {}", std::to_underlying(spell));
+                    for (Character &character : pParty->pCharacters) {
+                        character.timeToRecovery = 0_ticks;
+                        character.mana = 1000;
+                        character.health = std::max(character.health, 1000);
+                        character.conditions.resetAll();
+                    }
+                    pushSpellOrRangedAttack(isMm6() ? mm6SpellEffect(spell) : spell, 0, CombinedSkillValue(30, MASTERY_MASTER), 0, Pid(), isMm6() ? spell : SPELL_NONE);
+                }
+            }
+            const char *devEvent = std::getenv("OE_DEV_EVENT");
+            if (current_screen_type == SCREEN_GAME && devHookFrames == 180 && devEvent && *devEvent)
+                eventProcessor(std::atoi(devEvent), Pid(), 1);
+
+            engine->particle_engine->UpdateParticles();
+            engine->decal_builder->bloodsplat_container->uNumBloodsplats = 0;
+            if (engine->uNumStationaryLights_in_pStationaryLightsStack != pStationaryLightsStack->uNumLightsActive) {
+                engine->uNumStationaryLights_in_pStationaryLightsStack = pStationaryLightsStack->uNumLightsActive;
+            }
+
+            keyboardInputHandler->GenerateInputActions();
+            processQueuedMessages();
+            if (pArcomageGame->_gameInProgress) {
+                ArcomageGame::Loop();
+                render->Present();
+                continue;
+            }
+
+            pMediaPlayer->HouseMovieLoop();
+
+            gameTimer->tick();
+            animTimer->tick();
+
+            if (animTimer->isPaused() && !gameTimer->isPaused())
+                animTimer->setPaused(false);
+            if (gameTimer->isTurnBased() && !pParty->bTurnBasedModeOn)
+                gameTimer->setTurnBased(false);
+            if (!gameTimer->isPaused() && uGameState == GAME_STATE_PLAYING) {
+                onTimer();
+
+                if (!gameTimer->isTurnBased()) {
+                    _494035_timed_effects__water_walking_damage__etc(gameTimer->dt());
+                } else {
+                    // Need to process party death in turn-based mode.
+                    maybeWakeSoloSurvivor();
+                    updatePartyDeathState();
+                    if (engine->config->gameplay.TurnBasedFocusSkipsIncapacitated.value())
+                        dropFocusFromIncapacitatedCharacter();
+                }
+
+                if (dword_6BE364_game_settings_1 & GAME_SETTINGS_SKIP_WORLD_UPDATE) {
+                    dword_6BE364_game_settings_1 &= ~GAME_SETTINGS_SKIP_WORLD_UPDATE;
+                } else {
+                    Actor::UpdateActorAI();
+                    UpdateUserInput_and_MapSpecificStuff();
+                }
+            }
+
+            pAudioPlayer->UpdateSounds();
+
+            GameUI_WritePointedObjectStatusString();
+            engine->_statusBar->update();
+            turnBasedOverlay.update(animTimer->dt(), pTurnEngine->turn_stage);
+
+            if (uGameState == GAME_STATE_PLAYING) {
+                engine->Draw();
+                continue;
+            }
+
+            if (uGameState == GAME_STATE_CHANGE_LOCATION) {
+                pAudioPlayer->stopSounds();
+                PrepareWorld(0);
+                uGameState = GAME_STATE_PLAYING;
+                continue;
+            }
+
+            // if ((signed int)uGameState <= GAME_STATE_5 || uGameState ==
+            // GAME_STATE_GAME_QUITTING_TO_MAIN_MENU)//GAME_STATE_NEWGAME_OUT_GAMEMENU,
+            // GAME_STATE_LOADING_GAME
+            if (uGameState == GAME_STATE_LOADING_GAME ||
+                uGameState == GAME_STATE_NEWGAME_OUT_GAMEMENU ||
+                uGameState == GAME_STATE_5 ||
+                uGameState == GAME_STATE_GAME_QUITTING_TO_MAIN_MENU ||
+                uGameState == GAME_FINISHED) {
+                game_finished = true;
+                continue;
+            }
+            if (uGameState == GAME_STATE_FINAL_WINDOW) {
+                render->BeginScene2D();
+                GUI_UpdateWindows();
+                render->Present();
+                continue;
+            }
+            if (uGameState != GAME_STATE_PARTY_DIED) {
+                engine->Draw();  // when could this occur - can it be dropped?
+                continue;
+            }
+            if (uGameState == GAME_STATE_PARTY_DIED) {
+                pAudioPlayer->stopSounds();
+                pParty->pHirelings[0] = NPCData();
+                pParty->pHirelings[1] = NPCData();
+                for (int i = 0; i < (signed int)pNPCStats->uNumNewNPCs; ++i) {
+                    if (pNPCStats->pNPCData[i].field_24)
+                        pNPCStats->pNPCData[i].flags &= ~NPC_HIRED;
+                }
+                pMediaPlayer->PlayFullscreenMovie("losegame");
+                if (pMovie_Track)
+                    pMediaPlayer->Unload();
+                ++pParty->uNumDeaths;
+                for (Character &character : pParty->pCharacters) {
+                    character.giveAward(counterAward(AWARD_DEATHS));
+                }
+                pParty->days_played_without_rest = 0;
+                pParty->GetPlayingTime() += Duration::fromDays(7);  // += 2580480
+                pParty->last_regenerated = pParty->GetPlayingTime(); // No regeneration over the skipped week.
+                pParty->uFlags &= ~(PARTY_FLAG_WATER_DAMAGE | PARTY_FLAG_BURNING);
+                pParty->SetGold(0);
+                pActiveOverlayList->Reset();
+                pParty->pPartyBuffs.fill(SpellBuff());
+
+                if (pParty->bTurnBasedModeOn) {
+                    pTurnEngine->End(true);
+                    pParty->bTurnBasedModeOn = false;
+                }
+                for (Character &character : pParty->pCharacters) {
+                    character.conditions.resetAll();
+                    character.pCharacterBuffs.fill(
+                        SpellBuff());  // ???
+                                       // memset(pParty->pCharacters[i].conditions_times.data(),
+                                       // 0, 0xA0u);//(pConditions, 0, 160)
+                                       // memset(pParty->pCharacters[i].pCharacterBuffs.data(),
+                                       // 0, 0x180u);//(pCharacterBuffs[0], 0, 384)
+                    character.health = 1;
+                    if (isMm8()) { // MM8.exe 0x462B81.
+                        character.health = character.GetMaxHealth();
+                        character.mana = character.GetMaxMana();
+                    }
+                }
+                pParty->setActiveCharacterIndex(0);
+
+                if (isMm6()) {
+                    pParty->pos = Vec3f(-9728, -11319, 160); // MM6.exe 0x453EC1, respawn in New Sorpigal.
+                    pParty->_viewYaw = 512;
+                    mapid = pMapTable->GetMapInfo("oute3.odm");
+                } else if (isMm8() && pParty->_questBits[static_cast<QuestBit>(93)]) {
+                    pParty->pos = Vec3f(8315, -15562, 277); // MM8.exe 0x462BC2, Ravenshore once the party has been there.
+                    pParty->_viewYaw = 0;
+                    mapid = pMapTable->GetMapInfo("out02.odm");
+                } else if (isMm8()) {
+                    pParty->pos = Vec3f(3766, 7649, 545); // Dagger Wound Island.
+                    pParty->_viewYaw = 1248;
+                    mapid = pMapTable->GetMapInfo("out01.odm");
+                } else if (pParty->_questBits[QBIT_ESCAPED_EMERALD_ISLE]) {
+                    pParty->pos = Vec3f(-17331, 12547, 465); // respawn in harmondale
+                    pParty->_viewYaw = 0;
+                    mapid = MAP_HARMONDALE;
+                } else {
+                    pParty->pos = Vec3f(12552, 1816, 193); // respawn on emerald isle
+                    pParty->_viewYaw = 512;
+                    mapid = MAP_EMERALD_ISLAND;
+                }
+                pParty->uFallStartZ = pParty->pos.z;
+                pParty->_viewPitch = 0;
+                pParty->velocity = Vec3f();
+                // change map
+                if (engine->_currentLoadedMapId != mapid) {
+                    engine->_pendingTransition = MapDestination(mapid, PartyPlacement(pParty->pos, pParty->_viewYaw, pParty->_viewPitch, 0));
+                    PrepareWorld(1);
+                }
+                animTimer->setPaused(false);
+                gameTimer->setPaused(false);
+
+                Actor::InitializeActors();
+
+                int playerId = pParty->getRandomActiveCharacterId(vrng);
+
+                if (playerId != -1) {
+                    pParty->pCharacters[playerId].playReaction(SPEECH_CHEATED_DEATH);
+                }
+
+                engine->_statusBar->setEvent(LSTR_ONCE_AGAIN_YOUVE_CHEATED_DEATH);
+                uGameState = GAME_STATE_PLAYING;
+
+                // need to clear messages here??
+            }
+        } while (!game_finished);
+
+        gameTimer->setPaused(true);
+        engine->ResetCursor_Palettes_LODs_Level_Audio_SFT_Windows();
+        if (uGameState == GAME_STATE_LOADING_GAME) {
+            GameUI_LoadPlayerPortraitsAndVoices();
+            uGameState = GAME_STATE_PLAYING;
+            bLoading = true;
+            continue;
+        }
+        break;
+    }
+    current_screen_type = SCREEN_VIDEO;
+}

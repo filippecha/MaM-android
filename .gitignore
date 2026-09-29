@@ -1,0 +1,22 @@
+# Herní data si každý kopíruje z vlastní koupené hry, do repozitáře nepatří
+**/gamedata/
+**/gamedata-en-backup/
+# Podpisové klíče a hotová APK jsou osobní
+*.jks
+*.keystore
+*.apk
+*.idsig
+# Výstupy buildů a vývoje
+**/out-emu/*
+!**/out-emu/prebuild.sh
+**/out-android-emu/*
+!**/out-android-emu/prebuild.sh
+**/*.log
+**/devout/
+**/devout7/
+**/devshots/
+**/reference/
+# Licence Android SDK si každý zkopíruje ze svého Android Studia
+MaM 7/docker/licenses/*
+!MaM 7/docker/licenses/README.txt
+__pycache__/

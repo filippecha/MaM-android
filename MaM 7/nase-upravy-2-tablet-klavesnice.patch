@@ -1,0 +1,334 @@
+diff --git a/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java b/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
+index af6006d..fa5ae7c 100644
+--- a/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
++++ b/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
+@@ -2,7 +2,14 @@ package org.openenroth.game;
+ 
+ import android.content.ClipboardManager;
+ import android.content.Context;
++import android.graphics.Color;
++import android.graphics.Insets;
++import android.os.Build;
+ import android.os.Bundle;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.WindowInsets;
++import android.view.WindowInsetsController;
+ 
+ import org.libsdl.app.SDLActivity;
+ 
+@@ -16,7 +23,63 @@ public class OpenEnroth extends SDLActivity {
+         if (listener != null)
+             ((ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE)).removePrimaryClipChangedListener(listener);
+ 
+-        if (mLayout != null)
+-            TouchControls.attach(this, mLayout);
++        if (mLayout == null || mSurface == null)
++            return;
++
++        TouchControls.attach(this, mLayout, mSurface);
++        mLayout.setBackgroundColor(Color.BLACK); // Shows beside the game view when it's narrowed on tablets.
++
++        // Tablets can keep a navigation bar or a taskbar on screen even in immersive mode, and it is drawn over the
++        // game. The game and the controls are laid out in the area that stays visible. Display cutouts are left alone,
++        // the black bars around the 4:3 picture cover them.
++        if (Build.VERSION.SDK_INT >= 30) {
++            mLayout.setOnApplyWindowInsetsListener((view, insets) -> {
++                Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
++                view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
++                return insets;
++            });
++        }
++
++        mLayout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> fitGameView());
++    }
++
++    @Override
++    public void onWindowFocusChanged(boolean hasFocus) {
++        super.onWindowFocusChanged(hasFocus);
++        if (hasFocus)
++            hideSystemBars();
++    }
++
++    /** SDL hides the system bars with the old flags, which some tablets ignore for their taskbar. */
++    private void hideSystemBars() {
++        if (Build.VERSION.SDK_INT < 30)
++            return;
++        WindowInsetsController controller = getWindow().getInsetsController();
++        if (controller == null)
++            return;
++        controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
++        controller.hide(WindowInsets.Type.systemBars());
++    }
++
++    /** Shrinks the game view on tablets so that it ends where the control bars begin. */
++    private void fitGameView() {
++        int width = mLayout.getWidth() - mLayout.getPaddingLeft() - mLayout.getPaddingRight();
++        int height = mLayout.getHeight() - mLayout.getPaddingTop() - mLayout.getPaddingBottom();
++        if (width <= 0 || height <= 0)
++            return;
++
++        int margin = 0;
++        if (TouchControls.isTablet(width, height))
++            margin = TouchControls.barWidth(this, width, height);
++
++        View surface = mSurface;
++        if (!(surface.getLayoutParams() instanceof ViewGroup.MarginLayoutParams))
++            return;
++        ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) surface.getLayoutParams();
++        if (params.leftMargin == margin && params.rightMargin == margin)
++            return;
++        params.leftMargin = margin;
++        params.rightMargin = margin;
++        surface.post(() -> surface.setLayoutParams(params));
+     }
+ }
+diff --git a/android/openenroth/src/main/java/org/openenroth/game/TouchControls.java b/android/openenroth/src/main/java/org/openenroth/game/TouchControls.java
+index e9d189f..4e49989 100644
+--- a/android/openenroth/src/main/java/org/openenroth/game/TouchControls.java
++++ b/android/openenroth/src/main/java/org/openenroth/game/TouchControls.java
+@@ -35,16 +35,36 @@ final class TouchControls extends ViewGroup {
+     private final Button _leftMouse;
+     private final Button _rightMouse;
+     private final View _rightClickCatcher;
++    private final View _gameView;
+     private boolean _rightArmed = false;
+ 
+-    static void attach(Context context, ViewGroup root) {
+-        TouchControls controls = new TouchControls(context);
++    /**
++     * @param gameView                  View the game draws into, a sibling of the controls in `root`.
++     */
++    static void attach(Context context, ViewGroup root, View gameView) {
++        TouchControls controls = new TouchControls(context, gameView);
+         root.addView(controls._rightClickCatcher, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+         root.addView(controls, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+     }
+ 
+-    private TouchControls(Context context) {
++    /**
++     * Width of each control bar. Tablets, anything narrower than 1.9:1, get wider bars than the black bars around the
++     * 4:3 picture would give, and the game view is shrunk to fit between them.
++     */
++    static int barWidth(Context context, int width, int height) {
++        float density = context.getResources().getDisplayMetrics().density;
++        int natural = (width - height * 4 / 3) / 2;
++        int minimum = (int) ((isTablet(width, height) ? 150 : 110) * density);
++        return Math.max(natural, minimum);
++    }
++
++    static boolean isTablet(int width, int height) {
++        return width < height * 1.9f;
++    }
++
++    private TouchControls(Context context, View gameView) {
+         super(context);
++        _gameView = gameView;
+         setMotionEventSplittingEnabled(true);
+ 
+         // First row looks (down, up, center), second row flies (down, land, up), as bound in the game.
+@@ -126,8 +146,9 @@ final class TouchControls extends ViewGroup {
+ 
+     /** While the right button is armed, the next touch on the game is a right mouse button press held for as long as the finger stays down. */
+     private boolean onRightClickTouch(View view, MotionEvent event) {
+-        float x = event.getX();
+-        float y = event.getY();
++        // The catcher covers the whole layout, the game view can be inset from it.
++        float x = event.getX() + view.getLeft() - _gameView.getLeft();
++        float y = event.getY() + view.getTop() - _gameView.getTop();
+         switch (event.getActionMasked()) {
+         case MotionEvent.ACTION_DOWN:
+             SDLActivity.onNativeMouse(MotionEvent.BUTTON_SECONDARY, MotionEvent.ACTION_DOWN, x, y, false);
+@@ -157,15 +178,22 @@ final class TouchControls extends ViewGroup {
+         int pad = dp(6);
+ 
+         // The game picture is 4:3 and centered. On screens that are not wide enough the controls overlap its edges.
+-        int bar = Math.max((width - height * 4 / 3) / 2, dp(110));
++        int bar = barWidth(getContext(), width, height);
+         int cellWidth = (bar - 3 * pad) / 2;
+         int groupGap = 3 * pad;
+         int cellHeight = Math.min(cellWidth, (height - 5 * pad - 2 * groupGap) / 6); // Left bar stacks 6 rows in 3 groups.
+ 
+         // Left bar: keys at the top, keys with jump/pass in the middle, turning at the bottom.
+         layoutGrid(_leftTop, 3, pad, pad, (bar - 4 * pad) / 3, cellHeight, pad);
+-        layoutGrid(_leftMiddle, 2, pad, pad + 2 * cellHeight + pad + groupGap, cellWidth, cellHeight, pad);
+-        layoutGrid(_leftBottom, 2, pad, height - cellHeight - pad, cellWidth, cellHeight, pad);
++        int leftBottomTop = height - cellHeight - pad;
++        layoutGrid(_leftBottom, 2, pad, leftBottomTop, cellWidth, cellHeight, pad);
++        if (isTablet(width, height)) {
++            // Tablets have room to spare below the middle group, attack and quick spell sit right above turning.
++            layoutGrid(_leftMiddle.subList(0, 4), 2, pad, pad + 2 * cellHeight + pad + groupGap, cellWidth, cellHeight, pad);
++            layoutGrid(_leftMiddle.subList(4, 6), 2, pad, leftBottomTop - cellHeight - pad, cellWidth, cellHeight, pad);
++        } else {
++            layoutGrid(_leftMiddle, 2, pad, pad + 2 * cellHeight + pad + groupGap, cellWidth, cellHeight, pad);
++        }
+ 
+         // Right bar: mouse toggles, inventory/map and jump/pass at the top, walking at the bottom.
+         int right = width - bar;
+diff --git a/src/Engine/EngineGlobals.cpp b/src/Engine/EngineGlobals.cpp
+index a84bf53..5ab0d50 100644
+--- a/src/Engine/EngineGlobals.cpp
++++ b/src/Engine/EngineGlobals.cpp
+@@ -1,5 +1,7 @@
+ #include "EngineGlobals.h"
+ 
++#include "Io/KeyboardInputHandler.h"
++
+ #include "Library/Platform/Application/PlatformApplication.h"
+ 
+ Platform *platform = nullptr;
+@@ -12,6 +14,13 @@ PlatformApplication *application = nullptr;
+ 
+ void detail::globalProcessMessages() {
+     application->processMessages();
++
++    // Shows the on-screen keyboard on mobile while the player types a name.
++    if (window && keyboardInputHandler) {
++        bool textInputActive = keyboardInputHandler->IsTextInputActive();
++        if (window->isTextInputActive() != textInputActive)
++            window->setTextInputActive(textInputActive);
++    }
+ }
+ 
+ void detail::globalWaitForMessages() {
+diff --git a/src/Io/KeyboardInputHandler.h b/src/Io/KeyboardInputHandler.h
+index 6d8fcaa..943ccd2 100644
+--- a/src/Io/KeyboardInputHandler.h
++++ b/src/Io/KeyboardInputHandler.h
+@@ -48,6 +48,10 @@ class KeyboardInputHandler {
+     }
+ 
+     void StartTextInput(TextInputType type, int max_string_len, GUIWindow *pWindow);
++
++    [[nodiscard]] bool IsTextInputActive() const {
++        return inputType != TextInputType::None;
++    }
+     bool ProcessTextInput(PlatformKey key, int c);
+     void EndTextInput();
+ 
+diff --git a/src/Library/Platform/Interface/PlatformWindow.h b/src/Library/Platform/Interface/PlatformWindow.h
+index 0887f79..2193e40 100644
+--- a/src/Library/Platform/Interface/PlatformWindow.h
++++ b/src/Library/Platform/Interface/PlatformWindow.h
+@@ -68,6 +68,14 @@ class PlatformWindow {
+ 
+     virtual Marginsi frameMargins() const = 0;
+ 
++    /**
++     * Setter for the text input mode. On platforms with an on-screen keyboard, enabling it shows the keyboard.
++     *
++     * @param textInputActive           Whether the player is typing text into this window.
++     */
++    virtual void setTextInputActive(bool textInputActive) = 0;
++    virtual bool isTextInputActive() const = 0;
++
+     /**
+      * @return                          Pointer to the native window, e.g. `SDL_window` on SDL.
+      */
+diff --git a/src/Library/Platform/Null/NullWindow.cpp b/src/Library/Platform/Null/NullWindow.cpp
+index b18afd8..d7e8e70 100644
+--- a/src/Library/Platform/Null/NullWindow.cpp
++++ b/src/Library/Platform/Null/NullWindow.cpp
+@@ -92,6 +92,14 @@ bool NullWindow::isMouseRelative() const {
+     return _mouseRelative;
+ }
+ 
++void NullWindow::setTextInputActive(bool textInputActive) {
++    _textInputActive = textInputActive;
++}
++
++bool NullWindow::isTextInputActive() const {
++    return _textInputActive;
++}
++
+ Marginsi NullWindow::frameMargins() const {
+     if (_mode == WINDOW_MODE_WINDOWED) {
+         return _state->options.defaultFrameMargins;
+diff --git a/src/Library/Platform/Null/NullWindow.h b/src/Library/Platform/Null/NullWindow.h
+index a5e062a..abfecfb 100644
+--- a/src/Library/Platform/Null/NullWindow.h
++++ b/src/Library/Platform/Null/NullWindow.h
+@@ -31,6 +31,8 @@ class NullWindow : public PlatformWindow {
+     virtual PlatformWindowOrientations orientations() override;
+     virtual void setMouseRelative(bool mouseRelative) override;
+     virtual bool isMouseRelative() const override;
++    virtual void setTextInputActive(bool textInputActive) override;
++    virtual bool isTextInputActive() const override;
+     virtual Marginsi frameMargins() const override;
+     virtual void *nativeHandle() const override;
+     virtual void activate() override;
+@@ -47,5 +49,6 @@ class NullWindow : public PlatformWindow {
+     PlatformWindowMode _mode = WINDOW_MODE_WINDOWED;
+     bool _grabsMouse = false;
+     bool _mouseRelative = false;
++    bool _textInputActive = false;
+     PlatformWindowOrientations _orientations = LANDSCAPE_LEFT | LANDSCAPE_RIGHT | PORTRAIT_UP | PORTRAIT_DOWN;
+ };
+diff --git a/src/Library/Platform/Proxy/ProxyWindow.cpp b/src/Library/Platform/Proxy/ProxyWindow.cpp
+index 0af0207..e0cc79d 100644
+--- a/src/Library/Platform/Proxy/ProxyWindow.cpp
++++ b/src/Library/Platform/Proxy/ProxyWindow.cpp
+@@ -83,6 +83,14 @@ bool ProxyWindow::isMouseRelative() const {
+     return nonNullBase()->isMouseRelative();
+ }
+ 
++void ProxyWindow::setTextInputActive(bool textInputActive) {
++    nonNullBase()->setTextInputActive(textInputActive);
++}
++
++bool ProxyWindow::isTextInputActive() const {
++    return nonNullBase()->isTextInputActive();
++}
++
+ Marginsi ProxyWindow::frameMargins() const {
+     return nonNullBase()->frameMargins();
+ }
+diff --git a/src/Library/Platform/Proxy/ProxyWindow.h b/src/Library/Platform/Proxy/ProxyWindow.h
+index 3833b4e..444061b 100644
+--- a/src/Library/Platform/Proxy/ProxyWindow.h
++++ b/src/Library/Platform/Proxy/ProxyWindow.h
+@@ -31,6 +31,8 @@ class ProxyWindow : public ProxyBase<PlatformWindow> {
+     virtual PlatformWindowOrientations orientations() override;
+     virtual void setMouseRelative(bool mouseRelative) override;
+     virtual bool isMouseRelative() const override;
++    virtual void setTextInputActive(bool textInputActive) override;
++    virtual bool isTextInputActive() const override;
+     virtual Marginsi frameMargins() const override;
+     virtual void *nativeHandle() const override;
+     virtual void activate() override;
+diff --git a/src/Library/Platform/Sdl/SdlWindow.cpp b/src/Library/Platform/Sdl/SdlWindow.cpp
+index fe6123e..3365130 100644
+--- a/src/Library/Platform/Sdl/SdlWindow.cpp
++++ b/src/Library/Platform/Sdl/SdlWindow.cpp
+@@ -164,6 +164,18 @@ bool SdlWindow::isMouseRelative() const {
+     return SDL_GetWindowRelativeMouseMode(_window);
+ }
+ 
++void SdlWindow::setTextInputActive(bool textInputActive) {
++    if (textInputActive) {
++        SDL_StartTextInput(_window);
++    } else {
++        SDL_StopTextInput(_window);
++    }
++}
++
++bool SdlWindow::isTextInputActive() const {
++    return SDL_TextInputActive(_window);
++}
++
+ Marginsi SdlWindow::frameMargins() const {
+     Marginsi result;
+     if(!SDL_GetWindowBordersSize(_window, &result.top, &result.left, &result.bottom, &result.right)) {
+diff --git a/src/Library/Platform/Sdl/SdlWindow.h b/src/Library/Platform/Sdl/SdlWindow.h
+index edfc275..e1942e0 100644
+--- a/src/Library/Platform/Sdl/SdlWindow.h
++++ b/src/Library/Platform/Sdl/SdlWindow.h
+@@ -43,6 +43,8 @@ class SdlWindow : public PlatformWindow {
+ 
+     virtual void setMouseRelative(bool mouseRelative) override;
+     virtual bool isMouseRelative() const override;
++    virtual void setTextInputActive(bool textInputActive) override;
++    virtual bool isTextInputActive() const override;
+ 
+     virtual Marginsi frameMargins() const override;
+ 

@@ -1,0 +1,576 @@
+diff --git a/android/openenroth/src/main/java/org/openenroth/game/DataInstallerActivity.java b/android/openenroth/src/main/java/org/openenroth/game/DataInstallerActivity.java
+index f68bd6f7..0e7ef215 100644
+--- a/android/openenroth/src/main/java/org/openenroth/game/DataInstallerActivity.java
++++ b/android/openenroth/src/main/java/org/openenroth/game/DataInstallerActivity.java
+@@ -1,10 +1,16 @@
+ package org.openenroth.game;
+ 
+ import android.app.Activity;
++import android.app.AlertDialog;
+ import android.content.Intent;
++import android.content.pm.ShortcutInfo;
++import android.content.pm.ShortcutManager;
+ import android.content.res.AssetFileDescriptor;
+ import android.content.res.AssetManager;
+ import android.graphics.Color;
++import android.graphics.drawable.Icon;
++import android.net.Uri;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.Looper;
+@@ -13,6 +19,7 @@ import android.view.WindowManager;
+ import android.widget.LinearLayout;
+ import android.widget.ProgressBar;
+ import android.widget.TextView;
++import android.widget.Toast;
+ 
+ import java.io.File;
+ import java.io.FileOutputStream;
+@@ -20,6 +27,7 @@ import java.io.IOException;
+ import java.io.InputStream;
+ import java.io.OutputStream;
+ import java.util.ArrayList;
++import java.util.Collections;
+ import java.util.List;
+ 
+ /**
+@@ -29,6 +37,8 @@ import java.util.List;
+ public class DataInstallerActivity extends Activity {
+     private static final String ASSET_ROOT = "mm7";
+     private static final String MARKER_PREFIX = ".mm7data_installed_";
++    private static final String ACTION_SAVE_FOLDER = "org.openenroth.game.SAVE_FOLDER";
++    private static final int PICK_FOLDER = 1;
+ 
+     private final Handler _handler = new Handler(Looper.getMainLooper());
+     private TextView _status;
+@@ -38,16 +48,109 @@ public class DataInstallerActivity extends Activity {
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+ 
++        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++        buildUi();
++        addShortcut();
++
+         if (!hasBundledData() || markerFile().exists()) {
+-            startGame();
++            afterInstall();
+             return;
+         }
+ 
+-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+-        buildUi();
+         new Thread(this::install, "DataInstaller").start();
+     }
+ 
++    /** Asks for the save folder once, then brings the saved games up to date and starts the game. */
++    private void afterInstall() {
++        boolean choose = ACTION_SAVE_FOLDER.equals(getIntent().getAction());
++        if (choose) {
++            pickFolder();
++        } else if (SaveSync.folder(this) == null && !SaveSync.wasAsked(this)) {
++            new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
++                    .setTitle(R.string.sync_title)
++                    .setMessage(R.string.sync_message)
++                    .setCancelable(false)
++                    .setPositiveButton(R.string.sync_pick, (dialog, which) -> pickFolder())
++                    .setNegativeButton(R.string.sync_later, (dialog, which) -> {
++                        SaveSync.setAsked(this);
++                        syncAndStart();
++                    })
++                    .show();
++        } else {
++            syncAndStart();
++        }
++    }
++
++    private void pickFolder() {
++        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
++                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
++        try {
++            startActivityForResult(intent, PICK_FOLDER);
++        } catch (RuntimeException e) {
++            Toast.makeText(this, R.string.sync_unavailable, Toast.LENGTH_LONG).show();
++            SaveSync.setAsked(this);
++            syncAndStart();
++        }
++    }
++
++    @Override
++    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
++        super.onActivityResult(requestCode, resultCode, data);
++        if (requestCode != PICK_FOLDER)
++            return;
++        Uri tree = resultCode == RESULT_OK && data != null ? data.getData() : null;
++        if (tree != null) {
++            try {
++                getContentResolver().takePersistableUriPermission(tree,
++                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++                SaveSync.setFolder(this, tree);
++            } catch (RuntimeException e) {
++                Toast.makeText(this, R.string.sync_unavailable, Toast.LENGTH_LONG).show();
++            }
++        } else {
++            SaveSync.setAsked(this);
++        }
++        syncAndStart();
++    }
++
++    private void syncAndStart() {
++        if (SaveSync.folder(this) == null) {
++            startGame();
++            return;
++        }
++        _progress.setIndeterminate(true);
++        _status.setText(R.string.sync_running);
++        new Thread(() -> {
++            boolean ok = SaveSync.sync(this);
++            _handler.post(() -> {
++                if (!ok)
++                    Toast.makeText(this, R.string.sync_failed, Toast.LENGTH_LONG).show();
++                startGame();
++            });
++        }, "SaveSync").start();
++    }
++
++    /** Long press on the launcher icon offers changing the save folder. */
++    private void addShortcut() {
++        if (Build.VERSION.SDK_INT < 25)
++            return;
++        ShortcutManager manager = getSystemService(ShortcutManager.class);
++        if (manager == null)
++            return;
++        Intent intent = new Intent(this, DataInstallerActivity.class).setAction(ACTION_SAVE_FOLDER);
++        ShortcutInfo shortcut = new ShortcutInfo.Builder(this, "save_folder")
++                .setShortLabel(getString(R.string.sync_shortcut))
++                .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
++                .setIntent(intent)
++                .build();
++        try {
++            manager.setDynamicShortcuts(Collections.singletonList(shortcut));
++        } catch (RuntimeException e) {
++            // Launchers may refuse shortcuts, the dialog on first start still offers the choice.
++        }
++    }
++
+     private void buildUi() {
+         int pad = (int) (32 * getResources().getDisplayMetrics().density);
+ 
+@@ -136,7 +239,7 @@ public class DataInstallerActivity extends Activity {
+             if (!markerFile().createNewFile())
+                 throw new IOException("Cannot create marker file");
+ 
+-            _handler.post(this::startGame);
++            _handler.post(this::afterInstall);
+         } catch (IOException e) {
+             fail(getString(R.string.installer_failed, String.valueOf(e.getMessage())));
+         }
+@@ -187,6 +290,8 @@ public class DataInstallerActivity extends Activity {
+     }
+ 
+     private void startGame() {
++        if (isFinishing())
++            return;
+         startActivity(new Intent(this, OpenEnroth.class));
+         finish();
+     }
+diff --git a/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java b/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
+index fa5ae7c2..50a0496b 100644
+--- a/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
++++ b/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
+@@ -43,6 +43,20 @@ public class OpenEnroth extends SDLActivity {
+         mLayout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> fitGameView());
+     }
+ 
++    @Override
++    protected void onStop() {
++        super.onStop();
++        // Saves made in this session go to the sync folder when the game leaves the screen.
++        SaveSync.syncInBackground(this);
++    }
++
++    @Override
++    protected void onRestart() {
++        super.onRestart();
++        // Picks up saves another device put into the sync folder meanwhile.
++        SaveSync.syncInBackground(this);
++    }
++
+     @Override
+     public void onWindowFocusChanged(boolean hasFocus) {
+         super.onWindowFocusChanged(hasFocus);
+diff --git a/android/openenroth/src/main/java/org/openenroth/game/SaveSync.java b/android/openenroth/src/main/java/org/openenroth/game/SaveSync.java
+new file mode 100644
+index 00000000..e20c1339
+--- /dev/null
++++ b/android/openenroth/src/main/java/org/openenroth/game/SaveSync.java
+@@ -0,0 +1,334 @@
++package org.openenroth.game;
++
++import android.content.ContentResolver;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.database.Cursor;
++import android.net.Uri;
++import android.provider.DocumentsContract;
++import android.util.Log;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.text.SimpleDateFormat;
++import java.util.Arrays;
++import java.util.Date;
++import java.util.HashMap;
++import java.util.Locale;
++import java.util.Map;
++import java.util.Properties;
++import java.util.TreeSet;
++
++/**
++ * Keeps the saved games in sync with a folder the player picked, so that a sync app (for example one for Google
++ * Drive) can carry them to other devices. The engine keeps saving into its own private folder, the files are
++ * copied when the game starts and when it goes to the background.
++ *
++ * Each file is compared with its state after the last sync. A file changed on one side only is copied over.
++ * A file changed on both sides keeps the newer version and the other one goes to the "zaloha" subfolder of the
++ * picked folder, so no save is ever lost.
++ */
++public final class SaveSync {
++    private static final String TAG = "SaveSync";
++    private static final String PREFS = "save_sync";
++    private static final String KEY_TREE = "tree";
++    private static final String KEY_ASKED = "asked";
++    private static final String BACKUP_DIR = "zaloha";
++    private static final String STATE_FILE = "save-sync-state.properties";
++
++    private SaveSync() {}
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++
++    public static Uri folder(Context context) {
++        String tree = prefs(context).getString(KEY_TREE, null);
++        return tree == null ? null : Uri.parse(tree);
++    }
++
++    public static void setFolder(Context context, Uri tree) {
++        prefs(context).edit().putString(KEY_TREE, tree.toString()).putBoolean(KEY_ASKED, true).apply();
++        // A new folder starts without history, the first sync compares the contents.
++        new File(context.getFilesDir(), STATE_FILE).delete();
++    }
++
++    public static boolean wasAsked(Context context) {
++        return prefs(context).getBoolean(KEY_ASKED, false);
++    }
++
++    public static void setAsked(Context context) {
++        prefs(context).edit().putBoolean(KEY_ASKED, true).apply();
++    }
++
++    static File localDir(Context context) {
++        return new File(context.getFilesDir(), ".openenroth/saves");
++    }
++
++    /** Syncs in both directions. Returns false when the picked folder is not accessible. */
++    public static synchronized boolean sync(Context context) {
++        Uri tree = folder(context);
++        if (tree == null)
++            return true;
++        try {
++            new Run(context, tree).sync();
++            return true;
++        } catch (IOException | RuntimeException e) {
++            Log.w(TAG, "Save sync failed", e);
++            return false;
++        }
++    }
++
++    public static void syncInBackground(Context context) {
++        Context app = context.getApplicationContext();
++        if (folder(app) != null)
++            new Thread(() -> sync(app), "SaveSync").start();
++    }
++
++    private static final class Remote {
++        String id;
++        long modified;
++        long size;
++    }
++
++    private static final class Run {
++        private final Context _context;
++        private final ContentResolver _resolver;
++        private final Uri _tree;
++        private final String _rootId;
++        private final File _local;
++        private final File _stateFile;
++        private final Properties _state = new Properties();
++
++        Run(Context context, Uri tree) {
++            _context = context;
++            _resolver = context.getContentResolver();
++            _tree = tree;
++            _rootId = DocumentsContract.getTreeDocumentId(tree);
++            _local = localDir(context);
++            _stateFile = new File(context.getFilesDir(), STATE_FILE);
++        }
++
++        void sync() throws IOException {
++            if (!_local.isDirectory() && !_local.mkdirs())
++                throw new IOException("Cannot create " + _local);
++            if (_stateFile.exists())
++                try (InputStream in = new FileInputStream(_stateFile)) {
++                    _state.load(in);
++                }
++
++            Map<String, Remote> remote = list(_rootId, false);
++            Map<String, File> local = new HashMap<>();
++            File[] files = _local.listFiles();
++            if (files != null)
++                for (File file : files)
++                    if (file.isFile())
++                        local.put(file.getName(), file);
++
++            TreeSet<String> names = new TreeSet<>(local.keySet());
++            names.addAll(remote.keySet());
++            for (String name : names) {
++                if (name.startsWith("."))
++                    continue;
++                syncFile(name, local.get(name), remote.get(name));
++            }
++
++            try (OutputStream out = new FileOutputStream(_stateFile)) {
++                _state.store(out, null);
++            }
++        }
++
++        private void syncFile(String name, File local, Remote remote) throws IOException {
++            String recorded = _state.getProperty(name);
++            if (local == null) {
++                local = new File(_local, name);
++                pull(remote, local);
++            } else if (remote == null) {
++                remote = push(local, name, null);
++            } else {
++                boolean localChanged = recorded == null || !recorded.startsWith(localKey(local) + "|");
++                boolean remoteChanged = recorded == null || !recorded.endsWith("|" + remoteKey(remote));
++                if (localChanged && remoteChanged) {
++                    if (!sameContents(local, remote)) {
++                        // Changed on both sides: the newer file wins, the other one is kept in the backup folder.
++                        if (remote.modified > local.lastModified()) {
++                            backupLocal(local);
++                            pull(remote, local);
++                        } else {
++                            backupRemote(name, remote);
++                            remote = push(local, name, remote);
++                        }
++                    }
++                } else if (localChanged) {
++                    remote = push(local, name, remote);
++                } else if (remoteChanged) {
++                    pull(remote, local);
++                }
++            }
++            if (remote != null)
++                remote = stat(remote.id);
++            if (remote != null && local.isFile())
++                _state.setProperty(name, localKey(local) + "|" + remoteKey(remote));
++        }
++
++        private static String localKey(File file) {
++            return file.lastModified() + ":" + file.length();
++        }
++
++        private static String remoteKey(Remote remote) {
++            return remote.modified + ":" + remote.size;
++        }
++
++        private void pull(Remote remote, File local) throws IOException {
++            File temp = new File(local.getPath() + ".sync");
++            try (InputStream in = _resolver.openInputStream(docUri(remote.id));
++                 OutputStream out = new FileOutputStream(temp)) {
++                copy(in, out);
++            }
++            if (!temp.renameTo(local)) {
++                temp.delete();
++                throw new IOException("Cannot replace " + local);
++            }
++            if (remote.modified > 0)
++                local.setLastModified(remote.modified);
++        }
++
++        private Remote push(File local, String name, Remote existing) throws IOException {
++            String id = existing != null ? existing.id : create(_rootId, name, "application/octet-stream");
++            try (InputStream in = new FileInputStream(local);
++                 OutputStream out = _resolver.openOutputStream(docUri(id), "wt")) {
++                copy(in, out);
++            }
++            Remote result = stat(id);
++            if (result == null)
++                throw new IOException("Cannot read back " + name);
++            return result;
++        }
++
++        private void backupLocal(File local) throws IOException {
++            String id = create(backupDirId(), backupName(local.getName(), "telefon"), "application/octet-stream");
++            try (InputStream in = new FileInputStream(local);
++                 OutputStream out = _resolver.openOutputStream(docUri(id), "wt")) {
++                copy(in, out);
++            }
++        }
++
++        private void backupRemote(String name, Remote remote) throws IOException {
++            String id = create(backupDirId(), backupName(name, "slozka"), "application/octet-stream");
++            try (InputStream in = _resolver.openInputStream(docUri(remote.id));
++                 OutputStream out = _resolver.openOutputStream(docUri(id), "wt")) {
++                copy(in, out);
++            }
++        }
++
++        private static String backupName(String name, String origin) {
++            String stamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.ROOT).format(new Date());
++            int dot = name.lastIndexOf('.');
++            String base = dot > 0 ? name.substring(0, dot) : name;
++            String ext = dot > 0 ? name.substring(dot) : "";
++            return base + "_" + stamp + "_" + origin + ext;
++        }
++
++        private String backupDirId() throws IOException {
++            Remote dir = list(_rootId, true).get(BACKUP_DIR);
++            if (dir != null)
++                return dir.id;
++            return create(_rootId, BACKUP_DIR, DocumentsContract.Document.MIME_TYPE_DIR);
++        }
++
++        private boolean sameContents(File local, Remote remote) throws IOException {
++            if (local.length() != remote.size)
++                return false;
++            byte[] a = new byte[1 << 16];
++            byte[] b = new byte[1 << 16];
++            try (InputStream l = new FileInputStream(local);
++                 InputStream r = _resolver.openInputStream(docUri(remote.id))) {
++                while (true) {
++                    int n = readFully(l, a);
++                    int m = readFully(r, b);
++                    if (n != m)
++                        return false;
++                    if (n <= 0)
++                        return true;
++                    if (!Arrays.equals(Arrays.copyOf(a, n), Arrays.copyOf(b, m)))
++                        return false;
++                }
++            }
++        }
++
++        private static int readFully(InputStream in, byte[] buffer) throws IOException {
++            int total = 0;
++            while (total < buffer.length) {
++                int read = in.read(buffer, total, buffer.length - total);
++                if (read < 0)
++                    break;
++                total += read;
++            }
++            return total;
++        }
++
++        private Uri docUri(String id) {
++            return DocumentsContract.buildDocumentUriUsingTree(_tree, id);
++        }
++
++        private String create(String parentId, String name, String mime) throws IOException {
++            Uri uri = DocumentsContract.createDocument(_resolver, docUri(parentId), mime, name);
++            if (uri == null)
++                throw new IOException("Cannot create " + name);
++            return DocumentsContract.getDocumentId(uri);
++        }
++
++        private static final String[] COLUMNS = {
++            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
++            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
++            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
++            DocumentsContract.Document.COLUMN_SIZE,
++            DocumentsContract.Document.COLUMN_MIME_TYPE,
++        };
++
++        private Map<String, Remote> list(String parentId, boolean directories) throws IOException {
++            Map<String, Remote> result = new HashMap<>();
++            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(_tree, parentId);
++            try (Cursor cursor = _resolver.query(children, COLUMNS, null, null, null)) {
++                if (cursor == null)
++                    throw new IOException("Cannot list the save folder");
++                while (cursor.moveToNext()) {
++                    boolean dir = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(4));
++                    if (dir != directories)
++                        continue;
++                    Remote remote = new Remote();
++                    remote.id = cursor.getString(0);
++                    remote.modified = cursor.isNull(2) ? 0 : cursor.getLong(2);
++                    remote.size = cursor.isNull(3) ? 0 : cursor.getLong(3);
++                    result.put(cursor.getString(1), remote);
++                }
++            }
++            return result;
++        }
++
++        private Remote stat(String id) throws IOException {
++            try (Cursor cursor = _resolver.query(docUri(id), COLUMNS, null, null, null)) {
++                if (cursor == null || !cursor.moveToFirst())
++                    return null;
++                Remote remote = new Remote();
++                remote.id = id;
++                remote.modified = cursor.isNull(2) ? 0 : cursor.getLong(2);
++                remote.size = cursor.isNull(3) ? 0 : cursor.getLong(3);
++                return remote;
++            }
++        }
++
++        private static void copy(InputStream in, OutputStream out) throws IOException {
++            if (in == null || out == null)
++                throw new IOException("Cannot open a save file");
++            byte[] buffer = new byte[1 << 16];
++            int read;
++            while ((read = in.read(buffer)) > 0)
++                out.write(buffer, 0, read);
++        }
++    }
++}
+diff --git a/android/openenroth/src/main/res/values-cs/strings.xml b/android/openenroth/src/main/res/values-cs/strings.xml
+index 8986669d..3079f29f 100644
+--- a/android/openenroth/src/main/res/values-cs/strings.xml
++++ b/android/openenroth/src/main/res/values-cs/strings.xml
+@@ -4,4 +4,12 @@
+     <string name="installer_progress_unknown">Instaluji herní data: %1$d MB</string>
+     <string name="installer_no_space">Nedostatek místa. Potřeba %1$d MB, volných %2$d MB.</string>
+     <string name="installer_failed">Instalace herních dat selhala: %1$s</string>
++    <string name="sync_title">Synchronizace uložených her</string>
++    <string name="sync_message">Vyber složku, kam se budou kopírovat uložené hry. Když ji synchronizační aplikací propojíš s Google Diskem, uvidíš stejné pozice na všech zařízeních. Složku můžeš později změnit podržením ikony hry.</string>
++    <string name="sync_pick">Vybrat složku</string>
++    <string name="sync_later">Teď ne</string>
++    <string name="sync_running">Synchronizuji uložené hry…</string>
++    <string name="sync_failed">Složka pro uložené hry není dostupná, hra běží s pozicemi z tohoto zařízení.</string>
++    <string name="sync_unavailable">Toto zařízení neumí vybrat složku.</string>
++    <string name="sync_shortcut">Složka pro uložené hry</string>
+ </resources>
+diff --git a/android/openenroth/src/main/res/values/strings.xml b/android/openenroth/src/main/res/values/strings.xml
+index 9843d421..812b8c06 100644
+--- a/android/openenroth/src/main/res/values/strings.xml
++++ b/android/openenroth/src/main/res/values/strings.xml
+@@ -5,4 +5,12 @@
+     <string name="installer_progress_unknown">Installing game data: %1$d MB</string>
+     <string name="installer_no_space">Not enough free space. %1$d MB needed, %2$d MB available.</string>
+     <string name="installer_failed">Installing game data failed: %1$s</string>
++    <string name="sync_title">Saved games sync</string>
++    <string name="sync_message">Pick a folder the saved games are copied to. Sync it with Google Drive using a sync app and you get the same saves on every device. You can change the folder later by long-pressing the game icon.</string>
++    <string name="sync_pick">Pick folder</string>
++    <string name="sync_later">Not now</string>
++    <string name="sync_running">Syncing saved games…</string>
++    <string name="sync_failed">The save folder is not available, the game runs with the saves on this device.</string>
++    <string name="sync_unavailable">This device cannot pick a folder.</string>
++    <string name="sync_shortcut">Save folder</string>
+ </resources>
