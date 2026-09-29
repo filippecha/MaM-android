@@ -1,0 +1,129 @@
+diff --git a/src/Application/Game.cpp b/src/Application/Game.cpp
+index 961fd481..c834040b 100644
+--- a/src/Application/Game.cpp
++++ b/src/Application/Game.cpp
+@@ -68,6 +68,8 @@
+ #include "GUI/UI/UIGame.h"
+ #include "GUI/UI/UIHouses.h"
+ #include "GUI/UI/UITransition.h"
++#include "Engine/EngineIocContainer.h"
++#include "Engine/SpellFxRenderer.h"
+ #include "GUI/UI/UIMainMenu.h"
+ #include "GUI/UI/UIGameOver.h"
+ #include "GUI/UI/UIPartyCreation.h"
+@@ -1507,6 +1509,81 @@ void Game::processQueuedMessages() {
+     CastSpellInfoHelpers::castSpell();
+ }
+ 
++/**
++ * MaM 7 addition: linked teleporter pads between Castle Harmondale and Emerald Island, so that the party can go back to
++ * the starting island, which the original game closes for good. A column of light marks each pad. Stepping on it asks
++ * with the usual map transition window, the party arrives next to the other pad.
++ */
++struct PartyTeleporter {
++    MapId map;
++    Vec3f pos;
++    MapId destMap;
++    Vec3f destPos;
++    int destYaw;
++    std::string_view destFile;
++};
++
++static const PartyTeleporter partyTeleporters[] = {
++    // Castle Harmondale, a few steps inside the entrance.
++    {MAP_CASTLE_HARMONDALE, Vec3f(-5073, -2542, 1), MAP_EMERALD_ISLAND, Vec3f(12552, 1250, 193), 512, "out01.odm"},
++    // Emerald Island, where the pier meets the shore.
++    {MAP_EMERALD_ISLAND, Vec3f(12552, 1500, 193), MAP_CASTLE_HARMONDALE, Vec3f(-5073, -2842, 1), 512, "d29.blv"},
++};
++
++static constexpr float partyTeleporterRadius = 96;
++
++static void updatePartyTeleporters() {
++    static MapId lastMap = MAP_INVALID;
++    static bool wasOnPad = false;
++
++    const PartyTeleporter *pad = nullptr;
++    for (const PartyTeleporter &teleporter : partyTeleporters)
++        if (teleporter.map == engine->_currentLoadedMapId)
++            pad = &teleporter;
++    if (!pad) {
++        lastMap = engine->_currentLoadedMapId;
++        wasOnPad = false;
++        return;
++    }
++
++    // The island pad opens only after the party has left the island, before that it would skip the starting quests.
++    bool active = pad->map != MAP_EMERALD_ISLAND || pParty->_questBits[QBIT_ESCAPED_EMERALD_ISLE];
++    if (!active)
++        return;
++
++    if (!gameTimer->isPaused()) {
++        // Column of light over the pad.
++        SpellFxRenderer *fx = EngineIocContainer::ResolveSpellFxRenderer();
++        for (int i = 0; i < 2; i++) {
++            Vec3f offset = Vec3f::fromPolar(vrng->randomFloat() * partyTeleporterRadius * 0.8f, vrng->random(TrigLUT.uIntegerDoublePi), 0);
++            Particle_sw particle;
++            particle.type = ParticleType_Bitmap | ParticleType_Rotating | ParticleType_Ascending;
++            particle.uDiffuse = Color(96, 160, 255);
++            particle.x = pad->pos.x + offset.x;
++            particle.y = pad->pos.y + offset.y;
++            particle.z = pad->pos.z + 8;
++            particle.particle_size = 1.5f;
++            particle.timeToLive = Duration::randomRealtimeSeconds(vrng, 1, 2);
++            particle.texture = fx->effpar03;
++            engine->particle_engine->AddParticle(&particle);
++        }
++    }
++
++    Vec2f toPad = pad->pos.xy() - pParty->pos.xy();
++    bool onPad = toPad.length() <= partyTeleporterRadius && std::abs(pad->pos.z - pParty->pos.z) < 256;
++    bool arrived = lastMap != engine->_currentLoadedMapId;
++    lastMap = engine->_currentLoadedMapId;
++    bool stepped = onPad && !wasOnPad && !arrived;
++    wasOnPad = onPad;
++    if (!stepped || pDialogueWindow || current_screen_type != SCREEN_GAME || pParty->bTurnBasedModeOn)
++        return;
++
++    MapDestination destination(pad->destMap, PartyPlacement(pad->destPos, pad->destYaw, 0, 0));
++    auto window = std::make_unique<GUIWindow_IndoorEntryExit>(HOUSE_INVALID, 1, destination, pad->destFile);
++    window->_titleMap = pad->destMap;
++    pDialogueWindow = std::move(window);
++}
++
+ //----- (0046A14B) --------------------------------------------------------
+ void Game::onPressSpace() {
+     Pid pid = engine->PickKeyboard(engine->config->gameplay.KeyboardInteractionDepth.value(),
+@@ -1593,6 +1670,7 @@ void Game::gameLoop() {
+                 } else {
+                     Actor::UpdateActorAI();
+                     UpdateUserInput_and_MapSpecificStuff();
++                    updatePartyTeleporters();
+                 }
+             }
+ 
+diff --git a/src/GUI/UI/UITransition.cpp b/src/GUI/UI/UITransition.cpp
+index 4536c16a..2b2d44be 100644
+--- a/src/GUI/UI/UITransition.cpp
++++ b/src/GUI/UI/UITransition.cpp
+@@ -196,7 +196,8 @@ void GUIWindow_IndoorEntryExit::Update() {
+     Recti transition_window = pPrimaryWindow->frameRect;
+     transition_window.x = 493;
+     transition_window.w = 126;
+-    DrawTitleText(assets->pFontCreate.get(), 0, 5, colorTable.White, pMapTable->pInfos[map_id].name, 3, transition_window);
++    MapId title_map = _titleMap != MAP_INVALID ? _titleMap : map_id;
++    DrawTitleText(assets->pFontCreate.get(), 0, 5, colorTable.White, pMapTable->pInfos[title_map].name, 3, transition_window);
+     transition_window.x = SIDE_TEXT_BOX_POS_X;
+     transition_window.w = SIDE_TEXT_BOX_WIDTH;
+ 
+diff --git a/src/GUI/UI/UITransition.h b/src/GUI/UI/UITransition.h
+index cdcaa618..dac708cb 100644
+--- a/src/GUI/UI/UITransition.h
++++ b/src/GUI/UI/UITransition.h
+@@ -39,6 +39,7 @@ class GUIWindow_IndoorEntryExit : public GUIWindow_Transition {
+ 
+     std::string _mapName = "";
+     int _transitionStringId = 0;
++    MapId _titleMap = MAP_INVALID; // Map named in the title instead of the one being left, used by the teleporter pads.
+ 
+  private:
+     MapDestination _destination;

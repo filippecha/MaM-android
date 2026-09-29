@@ -68,6 +68,8 @@
 #include "GUI/UI/UIGame.h"
 #include "GUI/UI/UIHouses.h"
 #include "GUI/UI/UITransition.h"
+#include "Engine/EngineIocContainer.h"
+#include "Engine/SpellFxRenderer.h"
 #include "GUI/UI/UIMainMenu.h"
 #include "GUI/UI/UIGameOver.h"
 #include "GUI/UI/UIPartyCreation.h"
@@ -1507,6 +1509,81 @@ void Game::processQueuedMessages() {
     CastSpellInfoHelpers::castSpell();
 }
 
+/**
+ * MaM 7 addition: linked teleporter pads between Castle Harmondale and Emerald Island, so that the party can go back to
+ * the starting island, which the original game closes for good. A column of light marks each pad. Stepping on it asks
+ * with the usual map transition window, the party arrives next to the other pad.
+ */
+struct PartyTeleporter {
+    MapId map;
+    Vec3f pos;
+    MapId destMap;
+    Vec3f destPos;
+    int destYaw;
+    std::string_view destFile;
+};
+
+static const PartyTeleporter partyTeleporters[] = {
+    // Castle Harmondale, a few steps inside the entrance.
+    {MAP_CASTLE_HARMONDALE, Vec3f(-5073, -2542, 1), MAP_EMERALD_ISLAND, Vec3f(12552, 1250, 193), 512, "out01.odm"},
+    // Emerald Island, where the pier meets the shore.
+    {MAP_EMERALD_ISLAND, Vec3f(12552, 1500, 193), MAP_CASTLE_HARMONDALE, Vec3f(-5073, -2842, 1), 512, "d29.blv"},
+};
+
+static constexpr float partyTeleporterRadius = 96;
+
+static void updatePartyTeleporters() {
+    static MapId lastMap = MAP_INVALID;
+    static bool wasOnPad = false;
+
+    const PartyTeleporter *pad = nullptr;
+    for (const PartyTeleporter &teleporter : partyTeleporters)
+        if (teleporter.map == engine->_currentLoadedMapId)
+            pad = &teleporter;
+    if (!pad) {
+        lastMap = engine->_currentLoadedMapId;
+        wasOnPad = false;
+        return;
+    }
+
+    // The island pad opens only after the party has left the island, before that it would skip the starting quests.
+    bool active = pad->map != MAP_EMERALD_ISLAND || pParty->_questBits[QBIT_ESCAPED_EMERALD_ISLE];
+    if (!active)
+        return;
+
+    if (!gameTimer->isPaused()) {
+        // Column of light over the pad.
+        SpellFxRenderer *fx = EngineIocContainer::ResolveSpellFxRenderer();
+        for (int i = 0; i < 2; i++) {
+            Vec3f offset = Vec3f::fromPolar(vrng->randomFloat() * partyTeleporterRadius * 0.8f, vrng->random(TrigLUT.uIntegerDoublePi), 0);
+            Particle_sw particle;
+            particle.type = ParticleType_Bitmap | ParticleType_Rotating | ParticleType_Ascending;
+            particle.uDiffuse = Color(96, 160, 255);
+            particle.x = pad->pos.x + offset.x;
+            particle.y = pad->pos.y + offset.y;
+            particle.z = pad->pos.z + 8;
+            particle.particle_size = 1.5f;
+            particle.timeToLive = Duration::randomRealtimeSeconds(vrng, 1, 2);
+            particle.texture = fx->effpar03;
+            engine->particle_engine->AddParticle(&particle);
+        }
+    }
+
+    Vec2f toPad = pad->pos.xy() - pParty->pos.xy();
+    bool onPad = toPad.length() <= partyTeleporterRadius && std::abs(pad->pos.z - pParty->pos.z) < 256;
+    bool arrived = lastMap != engine->_currentLoadedMapId;
+    lastMap = engine->_currentLoadedMapId;
+    bool stepped = onPad && !wasOnPad && !arrived;
+    wasOnPad = onPad;
+    if (!stepped || pDialogueWindow || current_screen_type != SCREEN_GAME || pParty->bTurnBasedModeOn)
+        return;
+
+    MapDestination destination(pad->destMap, PartyPlacement(pad->destPos, pad->destYaw, 0, 0));
+    auto window = std::make_unique<GUIWindow_IndoorEntryExit>(HOUSE_INVALID, 1, destination, pad->destFile);
+    window->_titleMap = pad->destMap;
+    pDialogueWindow = std::move(window);
+}
+
 //----- (0046A14B) --------------------------------------------------------
 void Game::onPressSpace() {
     Pid pid = engine->PickKeyboard(engine->config->gameplay.KeyboardInteractionDepth.value(),
@@ -1593,6 +1670,7 @@ void Game::gameLoop() {
                 } else {
                     Actor::UpdateActorAI();
                     UpdateUserInput_and_MapSpecificStuff();
+                    updatePartyTeleporters();
                 }
             }
 

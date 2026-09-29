@@ -255,6 +255,23 @@ G3) Synchronizace uložených her přes vybranou složku
   keystore), nikdy neodinstalovávej, odinstalace savy smaže. Při prvním výběru složky se savy
   z telefonu do složky zkopírují.
 
+G4) Teleport Hrad Harmondale ↔ Smaragdový ostrov (volitelné rozšíření)
+- Na Smaragdový ostrov se v původní hře po odplutí nedá vrátit. Přidej do src/Application/Game.cpp dvě propojené
+  plošiny: hrad Harmondale (mapa MAP_CASTLE_HARMONDALE, d29.blv) kousek za vchodem na (-5073, -2542, 1), cíl
+  na ostrově (12552, 1250, 193) se směrem 512. Ostrov (MAP_EMERALD_ISLAND, out01.odm) na (12552, 1500, 193),
+  cíl ve vchodu hradu (-5073, -2842, 1) se směrem 512. Vchod hradu najdeš v událostech out02.odm
+  (EVENT_MoveToMap na D29.Blv), start nové hry je na molu (12552, 800).
+- Každý snímek hry (vedle UpdateUserInput_and_MapSpecificStuff): nad aktivní plošinou pár částic
+  (ParticleType_Bitmap | Rotating | Ascending, textura effpar03 ze SpellFxRenderer, modrá barva). Když družina
+  vstoupí do kruhu o poloměru 96, otevři pDialogueWindow = GUIWindow_IndoorEntryExit(HOUSE_INVALID, 1,
+  MapDestination(cílová mapa, PartyPlacement(cíl, směr, 0, 0)), soubor cílové mapy). Do okna přidej pole
+  _titleMap, aby nahoře byl název cíle, text „Přejete si opustit …?" je hotový lokalizovaný řetězec hry.
+- Plošina se nespustí hned po příchodu na mapu ani opakovaně, dokud z ní družina nesejde, ani v tahovém
+  režimu nebo když je otevřené jiné okno. Plošina na ostrově funguje až s úkolovým bitem
+  QBIT_ESCAPED_EMERALD_ISLE, jinak by šly přeskočit úvodní úkoly.
+- Ověř to na PC: desktopový build v Dockeru pod Xvfb ovládaný xdotool, s pomocnými proměnnými jen ve vývojové
+  kopii (skok na mapu, pozice, úkolový bit, výpis pozice). Obě cesty, okno s textem a návrat.
+
 H) Testování: povinné, než mi APK předáš
 - Rozeber hotové APK a ověř: podpis (apksigner verify), název a ID (aapt dump badging),
   native-code JEN arm64-v8a, všech 29 datových souborů uložených bez komprese, správné LOD uvnitř.

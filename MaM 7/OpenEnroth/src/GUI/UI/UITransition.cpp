@@ -196,7 +196,8 @@ void GUIWindow_IndoorEntryExit::Update() {
     Recti transition_window = pPrimaryWindow->frameRect;
     transition_window.x = 493;
     transition_window.w = 126;
-    DrawTitleText(assets->pFontCreate.get(), 0, 5, colorTable.White, pMapTable->pInfos[map_id].name, 3, transition_window);
+    MapId title_map = _titleMap != MAP_INVALID ? _titleMap : map_id;
+    DrawTitleText(assets->pFontCreate.get(), 0, 5, colorTable.White, pMapTable->pInfos[title_map].name, 3, transition_window);
     transition_window.x = SIDE_TEXT_BOX_POS_X;
     transition_window.w = SIDE_TEXT_BOX_WIDTH;
 

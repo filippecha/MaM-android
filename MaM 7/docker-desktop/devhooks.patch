@@ -1,0 +1,43 @@
+--- a/src/Application/Game.cpp	2026-09-29 14:13:06.017773800 +0200
++++ b/src/Application/Game.cpp	2026-09-29 14:13:06.084287200 +0200
+@@ -1,6 +1,8 @@
+ #include "Game.h"
+ 
+ #include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <array>
+ #include <cassert>
+ #include <optional>
+@@ -1629,6 +1631,31 @@
+         do {
+             MessageLoopWithWait();
+ 
++            // Development hooks (MaM 7 dev loop only): OE_DEV_MAP=<map id> moves the party a second into the game,
++            // OE_DEV_POS=<x>,<y>,<yaw> places it later, OE_DEV_QBIT=<id> sets a quest bit, OE_DEV_LOGPOS=1 logs the
++            // map and position every second, OE_DEV_DUMP=1 logs the map transitions of the loaded map.
++            static int devHookFrames = 0;
++            if (current_screen_type == SCREEN_GAME) {
++                ++devHookFrames;
++                if (const char *devMap = std::getenv("OE_DEV_MAP"); devMap && *devMap && devHookFrames == 60)
++                    startMapTransition(MapDestination(static_cast<MapId>(std::atoi(devMap)), MAP_START_POINT_PARTY));
++                if (const char *devBit = std::getenv("OE_DEV_QBIT"); devBit && *devBit && devHookFrames == 60)
++                    pParty->_questBits.set(static_cast<QuestBit>(std::atoi(devBit)));
++                if (const char *devPos = std::getenv("OE_DEV_POS"); devPos && *devPos && devHookFrames == 150) {
++                    int x = 0, y = 0, yaw = 0;
++                    if (std::sscanf(devPos, "%d,%d,%d", &x, &y, &yaw) == 3)
++                        placeParty(PartyPlacement(Vec3f(x, y, pParty->pos.z), yaw, 0, 0));
++                }
++                if (std::getenv("OE_DEV_DUMP") && devHookFrames == 120)
++                    for (int id = 0; id < 2000; id++)
++                        if (engine->_localEventMap.hasEvent(id))
++                            for (const EvtInstruction &ir : engine->_localEventMap.function(id))
++                                if (ir.opcode == EVENT_MoveToMap)
++                                    MM_WARNING("Dev: event {} {}", id, ir.toString());
++                if (std::getenv("OE_DEV_LOGPOS") && devHookFrames % 60 == 0)
++                    MM_WARNING("Dev: map {} party {} {} {} yaw {}", std::to_underlying(engine->_currentLoadedMapId), pParty->pos.x, pParty->pos.y, pParty->pos.z, pParty->_viewYaw);
++            }
++
+             engine->particle_engine->UpdateParticles();
+             engine->decal_builder->bloodsplat_container->uNumBloodsplats = 0;
+             if (engine->uNumStationaryLights_in_pStationaryLightsStack != pStationaryLightsStack->uNumLightsActive) {

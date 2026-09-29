@@ -1,6 +1,6 @@
 # Might and Magic VII – Android port „MaM 7"
 
-- Engine: [OpenEnroth](https://github.com/OpenEnroth/OpenEnroth), přesný commit v `engine-upstream.txt`, naše změny v `nase-upravy.patch`, `nase-upravy-2-tablet-klavesnice.patch`, `nase-upravy-3-dialog-bez-klavesnice.patch` a `nase-upravy-4-synchronizace-savu.patch` (aplikovat v tomto pořadí).
+- Engine: [OpenEnroth](https://github.com/OpenEnroth/OpenEnroth), přesný commit v `engine-upstream.txt`, naše změny v `nase-upravy.patch`, `nase-upravy-2-tablet-klavesnice.patch`, `nase-upravy-3-dialog-bez-klavesnice.patch`, `nase-upravy-4-synchronizace-savu.patch` a `nase-upravy-5-teleport-harmondale-ostrov.patch` (aplikovat v tomto pořadí).
 - Zdrojáky s úpravami: `OpenEnroth/`
 - Herní data z vlastní GOG instalace (v repozitáři nejsou, zkopíruj je sám): `gamedata/mm7/`. Čeština je fanouškovský překlad (`Events.lod`, `ICONS.LOD`).
 - Balíček `cz.mm7.game`, ikona gryfa z `MM7-Rel.exe`, podpisový klíč `out/keystore.jks` (vytvoří ho první build, v repozitáři není).
@@ -42,4 +42,16 @@ Při prvním spuštění se hra zeptá na složku pro uložené hry (lze odloži
 - nic se nemaže (smazaná pozice se ze složky vrátí).
 
 Synchronizaci složky s Google Diskem dělá samostatná aplikace (např. Autosync for Google Drive nebo FolderSync). Ověřeno v emulátoru: převzetí save ze složky, nahrání nového save do složky, převzetí změněného save, kolize se zálohou. Na telefonu a tabletu s Google Diskem vyzkoušeno a funguje (28. 9. 2026).
+
+## Teleport Hrad Harmondale ↔ Smaragdový ostrov
+
+Na Smaragdový ostrov se v původní hře po odplutí nedá vrátit. Naše kopie enginu přidává dvě propojené plošiny (`updatePartyTeleporters` v `src/Application/Game.cpp`):
+
+- **Hrad Harmondale:** pár kroků za vchodem (souřadnice -5073, -2542), družina přijde zpět do vchodu.
+- **Smaragdový ostrov:** na cestě, kde molo přechází v pevninu (12552, 1500), družina přijde na konec mola čelem k vesnici.
+- Plošinu označuje modrá záře. Po šlápnutí na ni se ukáže běžné okno přechodu mezi mapami („Přejete si opustit …?“, nahoře název cíle), klepnutí do obrazu nebo OK přenese, Zavřít ne. Po příchodu se plošina nespustí, dokud z ní družina nesejde.
+- Plošina na ostrově funguje až po opuštění ostrova (úkolový bit 136), jinak by šlo přeskočit úvodní úkoly.
+- Herní data ani formát uložených her se nemění.
+
+Vývojová smyčka na PC (desktopový build pod Xvfb, jako u MaM 6 a MaM 8): `bash tools/dev.sh <sekundy> "<kroky xdotool>"`, obrazovky a log v `devout7/`. Pomocné proměnné (jen ve vývojové kopii přes `docker-desktop/devhooks.patch`): `OE_DEV_MAP=<číslo mapy>`, `OE_DEV_POS=<x>,<y>,<směr>`, `OE_DEV_QBIT=<bit>`, `OE_DEV_LOGPOS=1`, `OE_DEV_DUMP=1` (přechody mezi mapami). Testy a kontrola stylu: `docker-desktop/test.sh`. Ověřeno na PC oběma směry (hrad → ostrov a ostrov → hrad), APK postavené, na telefonu zatím nevyzkoušené.
 

@@ -39,6 +39,7 @@ class GUIWindow_IndoorEntryExit : public GUIWindow_Transition {
 
     std::string _mapName = "";
     int _transitionStringId = 0;
+    MapId _titleMap = MAP_INVALID; // Map named in the title instead of the one being left, used by the teleporter pads.
 
  private:
     MapDestination _destination;
