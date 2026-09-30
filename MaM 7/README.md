@@ -47,7 +47,7 @@ Synchronizaci složky s Google Diskem dělá samostatná aplikace (např. Autosy
 
 Na Smaragdový ostrov se v původní hře po odplutí nedá vrátit. Naše kopie enginu přidává dvě propojené plošiny (`updatePartyTeleporters` v `src/Application/Game.cpp`):
 
-- **Hrad Harmondale:** pár kroků za vchodem (souřadnice -5073, -2542), družina přijde zpět do vchodu.
+- **Hrad Harmondale:** před fontánou v sále za vchodem (souřadnice -5120, -180), družina přijde kousek před ni, čelem k fontáně.
 - **Smaragdový ostrov:** na cestě, kde molo přechází v pevninu (12552, 1500), družina přijde na konec mola čelem k vesnici.
 - Plošinu označuje modrá záře. Po šlápnutí na ni se ukáže běžné okno přechodu mezi mapami („Přejete si opustit …?“, nahoře název cíle), klepnutí do obrazu nebo OK přenese, Zavřít ne. Po příchodu se plošina nespustí, dokud z ní družina nesejde.
 - Plošina na ostrově funguje až po opuštění ostrova (úkolový bit 136), jinak by šlo přeskočit úvodní úkoly.

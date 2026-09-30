@@ -1524,10 +1524,10 @@ struct PartyTeleporter {
 };
 
 static const PartyTeleporter partyTeleporters[] = {
-    // Castle Harmondale, a few steps inside the entrance.
-    {MAP_CASTLE_HARMONDALE, Vec3f(-5073, -2542, 1), MAP_EMERALD_ISLAND, Vec3f(12552, 1250, 193), 512, "out01.odm"},
+    // Castle Harmondale, in front of the fountain in the hall behind the entrance.
+    {MAP_CASTLE_HARMONDALE, Vec3f(-5120, -180, 1), MAP_EMERALD_ISLAND, Vec3f(12552, 1250, 193), 512, "out01.odm"},
     // Emerald Island, where the pier meets the shore.
-    {MAP_EMERALD_ISLAND, Vec3f(12552, 1500, 193), MAP_CASTLE_HARMONDALE, Vec3f(-5073, -2842, 1), 512, "d29.blv"},
+    {MAP_EMERALD_ISLAND, Vec3f(12552, 1500, 193), MAP_CASTLE_HARMONDALE, Vec3f(-5120, -480, 1), 512, "d29.blv"},
 };
 
 static constexpr float partyTeleporterRadius = 96;

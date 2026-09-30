@@ -257,10 +257,10 @@ G3) Synchronizace uložených her přes vybranou složku
 
 G4) Teleport Hrad Harmondale ↔ Smaragdový ostrov (volitelné rozšíření)
 - Na Smaragdový ostrov se v původní hře po odplutí nedá vrátit. Přidej do src/Application/Game.cpp dvě propojené
-  plošiny: hrad Harmondale (mapa MAP_CASTLE_HARMONDALE, d29.blv) kousek za vchodem na (-5073, -2542, 1), cíl
+  plošiny: hrad Harmondale (mapa MAP_CASTLE_HARMONDALE, d29.blv) před fontánou na (-5120, -180, 1), cíl
   na ostrově (12552, 1250, 193) se směrem 512. Ostrov (MAP_EMERALD_ISLAND, out01.odm) na (12552, 1500, 193),
-  cíl ve vchodu hradu (-5073, -2842, 1) se směrem 512. Vchod hradu najdeš v událostech out02.odm
-  (EVENT_MoveToMap na D29.Blv), start nové hry je na molu (12552, 800).
+  cíl kousek před fontánou (-5120, -480, 1) se směrem 512. Fontána nemá v d29.blv událost ani dekoraci, je to
+  nádrž s texturou vody wtrtyl kolem bodu (-5120, 736). Start nové hry je na molu (12552, 800).
 - Každý snímek hry (vedle UpdateUserInput_and_MapSpecificStuff): nad aktivní plošinou pár částic
   (ParticleType_Bitmap | Rotating | Ascending, textura effpar03 ze SpellFxRenderer, modrá barva). Když družina
   vstoupí do kruhu o poloměru 96, otevři pDialogueWindow = GUIWindow_IndoorEntryExit(HOUSE_INVALID, 1,
