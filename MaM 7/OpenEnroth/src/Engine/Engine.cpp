@@ -644,6 +644,12 @@ void MM7_LoadLods() {
     pSprites_LOD = new LodSpriteCache;
     pSprites_LOD->open(dfs->read("data/sprites.lod"));
 
+    if (dfs->exists("data/kraj.lod")) {
+        // Icons and textures of the "Stín nad Krajem" expansion, both from the same LOD.
+        pIcons_LOD->openKraj(dfs->read("data/kraj.lod"));
+        pBitmaps_LOD->openKraj(dfs->read("data/kraj.lod"));
+    }
+
     // TODO(captainurist):
     // on error in `open` we had this:
     // Error(localization->str(LSTR_MIGHT_AND_MAGIC_VII_IS_HAVING_TROUBLE), localization->str(LSTR_REINSTALL_NECESSARY));
@@ -727,6 +733,8 @@ void Engine::SecondaryInitialization() {
 
     pMapTable = new MapTable();
     pMapTable->Initialize(engine->resources()->eventsData("MapStats.txt"));
+    if (Blob krajMaps = engine->resources()->krajData("kmapstats.txt"))
+        pMapTable->Initialize(krajMaps); // Rows of the "Stín nad Krajem" expansion maps.
 
     pMonsterStats = new MonsterStats();
     pMonsterStats->Initialize(engine->resources()->eventsData("monsters.txt"));
@@ -745,6 +753,8 @@ void Engine::SecondaryInitialization() {
     pItemTable->Initialize(engine->resources());
 
     initializeHouses(engine->resources()->eventsData("2dEvents.txt"));
+    if (Blob krajHouses = engine->resources()->krajData("k2devents.txt"))
+        initializeHouses(krajHouses); // Hobbit holes of the "Stín nad Krajem" expansion.
 
     //pPaletteManager->SetMistColor(128, 128, 128);
     //pPaletteManager->RecalculateAll();
@@ -779,6 +789,8 @@ void Engine::SecondaryInitialization() {
     initializeChests();
 
     engine->_globalEventMap = EvtProgram::load(engine->resources()->eventsData("global.evt"));
+    if (Blob krajEvents = engine->resources()->krajData("kglobal.evt"))
+        engine->_globalEventMap.merge(EvtProgram::load(krajEvents)); // Dialogues of the "Stín nad Krajem" expansion.
 
     pBitmaps_LOD->reserveLoadedTextures();
     pSprites_LOD->reserveLoadedSprites();

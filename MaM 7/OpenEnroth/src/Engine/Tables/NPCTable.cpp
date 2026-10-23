@@ -17,7 +17,7 @@
 #include "Utility/String/Split.h"
 #include "Utility/String/Transformations.h"
 
-std::array<NPCTopic, 789> pNPCTopics;
+std::array<NPCTopic, 1500> pNPCTopics;
 NPCStats *pNPCStats = nullptr;
 
 int NPCStats::dword_AE336C_LastMispronouncedNameFirstLetter = -1;
@@ -123,6 +123,16 @@ void NPCStats::Initialize(ResourceManager *resourceManager) {
     InitializeNPCDist(resourceManager->eventsData("npcdist.txt"));
     InitializeNPCNames(resourceManager->eventsData("npcnames.txt"));
     InitializeNPCProfs(resourceManager->eventsData("npcprof.txt"));
+
+    // Inhabitants of the "Stín nad Krajem" expansion, in unused rows of the original tables.
+    if (Blob krajNpcs = resourceManager->krajData("knpcdata.txt"))
+        InitializeNPCData(krajNpcs);
+    if (Blob krajGreets = resourceManager->krajData("knpcgreet.txt"))
+        InitializeNPCGreets(krajGreets);
+    if (Blob krajTexts = resourceManager->krajData("knpctext.txt"))
+        InitializeNPCText(krajTexts);
+    if (Blob krajTopics = resourceManager->krajData("knpctopic.txt"))
+        InitializeNPCTopics(krajTopics);
 }
 
 void NPCStats::InitializeNPCNames(const Blob &npcNames) {
@@ -255,6 +265,9 @@ void NPCStats::InitializeAdditionalNPCs(NPCData *pNPCDataBuff, MonsterId npc_uid
         pNPCDataBuff->rep = 0;
     }
 
+    // Maps without a profession table row (the "Stín nad Krajem" expansion) use the one of Harmondale.
+    if (!pProfessionChance[uMapId].total)
+        uMapId = MAP_HARMONDALE;
     max_prof_cap = grng->random(pProfessionChance[uMapId].total);
     test_prof_summ = 0;
     pNPCDataBuff->profession = NPC_PROFESSION_LAST;

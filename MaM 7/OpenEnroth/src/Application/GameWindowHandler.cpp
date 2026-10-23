@@ -57,6 +57,7 @@ static char PlatformKeyToChar(PlatformKey key, PlatformModifiers mods) {
 
 GameWindowHandler::GameWindowHandler() : PlatformEventFilter(EVENTS_ALL) {
     this->mouse = EngineIocContainer::ResolveMouse();
+    _padTickTime = std::chrono::steady_clock::now();
 }
 
 GameWindowHandler::~GameWindowHandler() {}
@@ -558,12 +559,75 @@ bool GameWindowHandler::gamepadConnectionEvent(const PlatformGamepadEvent *event
     return false;
 }
 
+bool GameWindowHandler::gamepadCursorMode() const {
+    return pArcomageGame->_gameInProgress || current_screen_type != SCREEN_GAME || GetCurrentMenuID() != MENU_NONE;
+}
+
+void GameWindowHandler::gamepadTick() {
+    auto now = std::chrono::steady_clock::now();
+    float seconds = std::chrono::duration<float>(now - _padTickTime).count();
+    _padTickTime = now;
+    if (!gamepadCursorMode() || !mouse || seconds <= 0 || seconds > 0.5f)
+        return;
+    // Past the dead zone the cursor moves up to 500 pixels a second (render coordinates, 640 x 480).
+    auto speed = [](float tilt) { return std::abs(tilt) < 0.2f ? 0.0f : tilt * std::abs(tilt) * 500; };
+    float dx = speed(_padCursorX) * seconds, dy = speed(_padCursorY) * seconds;
+    if (dx == 0 && dy == 0)
+        return;
+    Pointi position = mouse->position();
+    position.x = std::clamp(position.x + static_cast<int>(std::lround(dx)), 0, 639);
+    position.y = std::clamp(position.y + static_cast<int>(std::lround(dy)), 0, 479);
+    OnMouseMove(position, Pointi(0, 0), _padLeftDown, _padRightDown);
+}
+
 bool GameWindowHandler::gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) {
+    if (gamepadCursorMode() && mouse) {
+        Pointi position = mouse->position();
+        switch (event->key) {
+        case PlatformKey::KEY_GAMEPAD_A:
+            _padLeftDown = true;
+            OnMouseLeftClick(position, false);
+            return false;
+        case PlatformKey::KEY_GAMEPAD_X:
+            _padRightDown = true;
+            OnMouseRightClick(position);
+            return false;
+        case PlatformKey::KEY_GAMEPAD_B:
+            handleKeyPress(PlatformKey::KEY_ESCAPE, 0, false);
+            return false;
+        case PlatformKey::KEY_GAMEPAD_LEFT:
+        case PlatformKey::KEY_GAMEPAD_RIGHT:
+        case PlatformKey::KEY_GAMEPAD_UP:
+        case PlatformKey::KEY_GAMEPAD_DOWN: {
+            int step = 12;
+            position.x = std::clamp(position.x + (event->key == PlatformKey::KEY_GAMEPAD_RIGHT ? step : event->key == PlatformKey::KEY_GAMEPAD_LEFT ? -step : 0), 0, 639);
+            position.y = std::clamp(position.y + (event->key == PlatformKey::KEY_GAMEPAD_DOWN ? step : event->key == PlatformKey::KEY_GAMEPAD_UP ? -step : 0), 0, 479);
+            OnMouseMove(position, Pointi(0, 0), _padLeftDown, _padRightDown);
+            return false;
+        }
+        default:
+            break;
+        }
+    }
     handleKeyPress(event->key, 0, false);
     return false;
 }
 
 bool GameWindowHandler::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) {
+    if (event->key == PlatformKey::KEY_GAMEPAD_A && _padLeftDown) {
+        _padLeftDown = false;
+        OnMouseLeftUp();
+        return false;
+    }
+    if (event->key == PlatformKey::KEY_GAMEPAD_X && _padRightDown) {
+        _padRightDown = false;
+        OnMouseRightUp();
+        return false;
+    }
+    if (event->key == PlatformKey::KEY_GAMEPAD_B && gamepadCursorMode()) {
+        handleKeyRelease(PlatformKey::KEY_ESCAPE);
+        return false;
+    }
     handleKeyRelease(event->key);
     return false;
 }
@@ -571,6 +635,21 @@ bool GameWindowHandler::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *ev
 bool GameWindowHandler::gamepadAxisEvent(const PlatformGamepadAxisEvent *event) {
     PlatformKey key = event->axis;
     float value = event->value;
+
+    // Ours: both sticks remembered for the cursor (gamepadTick()); in the menus they do nothing else.
+    if (key == PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT || key == PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT)
+        _padCursorX = value;
+    if (key == PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN || key == PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN)
+        _padCursorY = value;
+    if (gamepadCursorMode()) {
+        // The walking keys the sticks held before the window opened are let go.
+        for (PlatformKey held : {PlatformKey::KEY_GAMEPAD_LEFTSTICK_LEFT, PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT,
+                                 PlatformKey::KEY_GAMEPAD_LEFTSTICK_UP, PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN,
+                                 PlatformKey::KEY_GAMEPAD_RIGHTSTICK_LEFT, PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT,
+                                 PlatformKey::KEY_GAMEPAD_RIGHTSTICK_UP, PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN})
+            handleKeyRelease(held);
+        return false;
+    }
 
     // TODO(captainurist): this is temporary, we need separate axis enum and proper axis handling
     if (value < 0) {

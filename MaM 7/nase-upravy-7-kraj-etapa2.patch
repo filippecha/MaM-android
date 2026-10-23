@@ -1,0 +1,334 @@
+diff --git a/src/Arcomage/Arcomage.cpp b/src/Arcomage/Arcomage.cpp
+index 467178c0..7f923b3a 100644
+--- a/src/Arcomage/Arcomage.cpp
++++ b/src/Arcomage/Arcomage.cpp
+@@ -2897,7 +2897,7 @@ void ArcomageGame::PrepareArcomage() {
+ 
+ void SetStartConditions() {
+     const ArcomageStartConditions *st_cond;
+-    st_cond = &start_conditions[window_SpeakInHouse->houseId()];
++    st_cond = &start_conditions[arcomageRulesTavern(window_SpeakInHouse->houseId())];
+ 
+     // set start conditions
+     start_tower_height = st_cond->tower_height;
+diff --git a/src/Engine/Data/HouseEnumFunctions.h b/src/Engine/Data/HouseEnumFunctions.h
+index b63ca1b2..6641315f 100644
+--- a/src/Engine/Data/HouseEnumFunctions.h
++++ b/src/Engine/Data/HouseEnumFunctions.h
+@@ -52,14 +52,24 @@ inline bool isBoat(HouseId houseId) {
+ }
+ 
+ inline bool isTavern(HouseId houseId) {
+-    return houseId >= HOUSE_FIRST_TAVERN && houseId <= HOUSE_LAST_TAVERN;
++    return (houseId >= HOUSE_FIRST_TAVERN && houseId <= HOUSE_LAST_TAVERN) || houseId == HOUSE_TAVERN_SHIRE;
+ }
+ 
+ inline bool isArcomageTavern(HouseId houseId) {
+     return houseId >= HOUSE_FIRST_ARCOMAGE_TAVERN && houseId <= HOUSE_LAST_ARCOMAGE_TAVERN;
+ }
+ 
++/**
++ * @param houseId                       Tavern.
++ * @return                              Tavern whose Arcomage rules apply. The Hobbiton tavern plays by the rules of
++ *                                      Harmondale and doesn't count towards the Arcomage champion quest.
++ */
++inline HouseId arcomageRulesTavern(HouseId houseId) {
++    return houseId == HOUSE_TAVERN_SHIRE ? HOUSE_TAVERN_HARMONDALE : houseId;
++}
++
+ inline int arcomageTopicForTavern(HouseId houseId) {
++    houseId = arcomageRulesTavern(houseId);
+     assert(isArcomageTavern(houseId));
+     return std::to_underlying(houseId) - std::to_underlying(HOUSE_FIRST_ARCOMAGE_TAVERN) + 355;
+ }
+diff --git a/src/Engine/Data/HouseEnums.h b/src/Engine/Data/HouseEnums.h
+index aa533f82..6f17162a 100644
+--- a/src/Engine/Data/HouseEnums.h
++++ b/src/Engine/Data/HouseEnums.h
+@@ -585,6 +585,9 @@ enum class HouseId {
+ };
+ using enum HouseId;
+ 
++/** Hobbiton tavern of the MaM 7 expansion "Stín nad Krajem", it takes an unused tavern slot of the house table. */
++inline constexpr HouseId HOUSE_TAVERN_SHIRE = HOUSE_121;
++
+ enum class HouseType : uint16_t {
+     HOUSE_TYPE_INVALID = 0,
+     HOUSE_TYPE_WEAPON_SHOP = 1,
+diff --git a/src/Engine/Engine.cpp b/src/Engine/Engine.cpp
+index 9f1c09fd..3ebbef70 100644
+--- a/src/Engine/Engine.cpp
++++ b/src/Engine/Engine.cpp
+@@ -753,6 +753,8 @@ void Engine::SecondaryInitialization() {
+     pItemTable->Initialize(engine->resources());
+ 
+     initializeHouses(engine->resources()->eventsData("2dEvents.txt"));
++    if (Blob krajHouses = engine->resources()->krajData("k2devents.txt"))
++        initializeHouses(krajHouses); // Hobbit holes of the "Stín nad Krajem" expansion.
+ 
+     //pPaletteManager->SetMistColor(128, 128, 128);
+     //pPaletteManager->RecalculateAll();
+@@ -787,6 +789,8 @@ void Engine::SecondaryInitialization() {
+     initializeChests();
+ 
+     engine->_globalEventMap = EvtProgram::load(engine->resources()->eventsData("global.evt"));
++    if (Blob krajEvents = engine->resources()->krajData("kglobal.evt"))
++        engine->_globalEventMap.merge(EvtProgram::load(krajEvents)); // Dialogues of the "Stín nad Krajem" expansion.
+ 
+     pBitmaps_LOD->reserveLoadedTextures();
+     pSprites_LOD->reserveLoadedSprites();
+diff --git a/src/Engine/Evt/EvtProgram.cpp b/src/Engine/Evt/EvtProgram.cpp
+index 6a22dddf..7cdbf5d7 100644
+--- a/src/Engine/Evt/EvtProgram.cpp
++++ b/src/Engine/Evt/EvtProgram.cpp
+@@ -43,6 +43,11 @@ void EvtProgram::add(int eventId, EvtInstruction ir) {
+     _eventsById[eventId].push_back(std::move(ir));
+ }
+ 
++void EvtProgram::merge(const EvtProgram &other) {
++    for (const auto &[eventId, events] : other._eventsById)
++        _eventsById[eventId] = events;
++}
++
+ void EvtProgram::clear() {
+     _eventsById.clear();
+ }
+diff --git a/src/Engine/Evt/EvtProgram.h b/src/Engine/Evt/EvtProgram.h
+index c08cb387..e9cc6b2a 100644
+--- a/src/Engine/Evt/EvtProgram.h
++++ b/src/Engine/Evt/EvtProgram.h
+@@ -18,6 +18,13 @@ class EvtProgram {
+     static EvtProgram load(const Blob &rawData);
+ 
+     void add(int eventId, EvtInstruction ir);
++
++    /**
++     * Adds all events of another program, events with the same ids are replaced.
++     *
++     * @param other                     Program to take the events from.
++     */
++    void merge(const EvtProgram &other);
+     void clear();
+ 
+     bool hasEvent(int eventId) const {
+diff --git a/src/Engine/Graphics/Outdoor.cpp b/src/Engine/Graphics/Outdoor.cpp
+index aad90c01..ecb09cb3 100644
+--- a/src/Engine/Graphics/Outdoor.cpp
++++ b/src/Engine/Graphics/Outdoor.cpp
+@@ -277,6 +277,23 @@ bool OutdoorLocation::Initialize(std::string_view filename, int days_played,
+     return false;
+ }
+ 
++/**
++ * The Shire of the "Stín nad Krajem" expansion gains models and decorations as the expansion grows, and its delta in
++ * a save of an older version can't be read with the newer map. The counts at the start of the delta tell.
++ */
++static bool deltaFitsLocation(const Blob &delta, const OutdoorLocation_MM7 &location) {
++    LocationHeader_MM7 header;
++    if (delta.size() < sizeof(header))
++        return false;
++    std::memcpy(&header, delta.data(), sizeof(header));
++
++    size_t totalFaces = 0;
++    for (const BSPModelData_MM7 &model : location.models)
++        totalFaces += model.numFaces;
++    return header.totalFacesCount == totalFaces && header.bmodelCount == location.models.size() &&
++           header.decorationCount == location.decorations.size();
++}
++
+ bool isShireInstalled() {
+     return !pMapTable->pInfos[MAP_SHIRE].fileName.empty();
+ }
+@@ -502,7 +519,9 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
+     auto storedDelta = pMapDeltas.find(ddm_filename);
+     if (storedDelta == pMapDeltas.end()) {
+         respawnInitial = true;
+-    } else if (Blob blob = lod::decodeMaybeCompressed(storedDelta->second)) {
++    } else if (Blob blob = lod::decodeMaybeCompressed(storedDelta->second); ascii::noCaseEquals(odm_filename, "out16.odm") && !deltaFitsLocation(blob, location)) {
++        respawnInitial = true; // The Shire of an older expansion version.
++    } else if (blob) {
+         try {
+             deserialize(blob, &delta, tags::context(location));
+ 
+diff --git a/src/Engine/SaveLoad.cpp b/src/Engine/SaveLoad.cpp
+index 3ca2568d..bf0fdb56 100644
+--- a/src/Engine/SaveLoad.cpp
++++ b/src/Engine/SaveLoad.cpp
+@@ -67,6 +67,12 @@ void loadGame(std::string_view fileName) {
+     *gameTimer = std::move(state.eventTimer);
+     *pActiveOverlayList = std::move(state.overlays);
+     pNPCStats->pNPCData = std::move(state.npcData);
++
++    // Saves made before the "Stín nad Krajem" expansion have its inhabitants as blank unused rows. Portraits never
++    // change during the game, so a row without a portrait that has one in the table is taken from the table.
++    for (size_t i = 0; i < pNPCStats->pNPCData.size(); i++)
++        if (!pNPCStats->pNPCData[i].portraitId && pNPCStats->pOriginalNPCData[i].portraitId)
++            pNPCStats->pNPCData[i] = pNPCStats->pOriginalNPCData[i];
+     pNPCStats->pGroups = std::move(state.npcGroups);
+     pMapDeltas = std::move(state.mapDeltas);
+ 
+diff --git a/src/Engine/Tables/NPCTable.cpp b/src/Engine/Tables/NPCTable.cpp
+index cd29b633..ae6c2a70 100644
+--- a/src/Engine/Tables/NPCTable.cpp
++++ b/src/Engine/Tables/NPCTable.cpp
+@@ -17,7 +17,7 @@
+ #include "Utility/String/Split.h"
+ #include "Utility/String/Transformations.h"
+ 
+-std::array<NPCTopic, 789> pNPCTopics;
++std::array<NPCTopic, 1500> pNPCTopics;
+ NPCStats *pNPCStats = nullptr;
+ 
+ int NPCStats::dword_AE336C_LastMispronouncedNameFirstLetter = -1;
+@@ -123,6 +123,16 @@ void NPCStats::Initialize(ResourceManager *resourceManager) {
+     InitializeNPCDist(resourceManager->eventsData("npcdist.txt"));
+     InitializeNPCNames(resourceManager->eventsData("npcnames.txt"));
+     InitializeNPCProfs(resourceManager->eventsData("npcprof.txt"));
++
++    // Inhabitants of the "Stín nad Krajem" expansion, in unused rows of the original tables.
++    if (Blob krajNpcs = resourceManager->krajData("knpcdata.txt"))
++        InitializeNPCData(krajNpcs);
++    if (Blob krajGreets = resourceManager->krajData("knpcgreet.txt"))
++        InitializeNPCGreets(krajGreets);
++    if (Blob krajTexts = resourceManager->krajData("knpctext.txt"))
++        InitializeNPCText(krajTexts);
++    if (Blob krajTopics = resourceManager->krajData("knpctopic.txt"))
++        InitializeNPCTopics(krajTopics);
+ }
+ 
+ void NPCStats::InitializeNPCNames(const Blob &npcNames) {
+diff --git a/src/Engine/Tables/NPCTable.h b/src/Engine/Tables/NPCTable.h
+index 9719a100..3a6036f4 100644
+--- a/src/Engine/Tables/NPCTable.h
++++ b/src/Engine/Tables/NPCTable.h
+@@ -125,7 +125,7 @@ struct NPCStats {
+     IndexedArray<NPCProfessionChance, MAP_FIRST, MAP_LAST> pProfessionChance;
+     int field_17884 = 0;
+     int field_17888 = 0;
+-    std::array<NPCGreeting, 206> pNPCGreetings;
++    std::array<NPCGreeting, 300> pNPCGreetings; // 206 originally, the rest is for the "Stín nad Krajem" expansion.
+     std::array<uint16_t, 51> pOriginalGroups = {{}}; // NPC groups as read from npcgroup.txt.
+     std::array<uint16_t, 51> pGroups = {{}}; // NPC groups used during the game.
+     int uNewlNPCBufPos = 0;
+@@ -137,5 +137,5 @@ struct NPCStats {
+     static int dword_AE3370_LastMispronouncedNameResult;
+ };
+ 
+-extern std::array<NPCTopic, 789> pNPCTopics;
++extern std::array<NPCTopic, 1500> pNPCTopics; // 789 originally, the rest is for the "Stín nad Krajem" expansion.
+ extern NPCStats *pNPCStats;
+diff --git a/src/GUI/UI/UIHouses.cpp b/src/GUI/UI/UIHouses.cpp
+index 7dc89192..b0fdeb6f 100644
+--- a/src/GUI/UI/UIHouses.cpp
++++ b/src/GUI/UI/UIHouses.cpp
+@@ -56,7 +56,7 @@ GraphicsImage *_591428_endcap = nullptr;
+ std::vector<HouseNpcDesc> houseNpcs;
+ int currentHouseNpc;
+ 
+-std::array<const HouseAnimDescr, 196> pAnimatedRooms = { {  // 0x4E5F70
++std::array<const HouseAnimDescr, 201> pAnimatedRooms = { {  // 0x4E5F70
+     { "", 0x4, 0x1F4, HOUSE_TYPE_INVALID, 0, 0 },
+     { "Human Armor01", 0x20, 0x2C0, HOUSE_TYPE_ARMOR_SHOP, 58, 0 },
+     { "Necromancer Armor01", 0x20, 0x2D7, HOUSE_TYPE_ARMOR_SHOP, 70, 0 },
+@@ -252,7 +252,14 @@ std::array<const HouseAnimDescr, 196> pAnimatedRooms = { {  // 0x4E5F70
+     { "Out02 Castle Harmondy Abandoned", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 },
+     { "Human Temple02", 0x24, 0x3AB, HOUSE_TYPE_TEMPLE, 27, 0 },
+     { "Player Castle Good", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 },
+-    { "Player Castle Bad", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 }
++    { "Player Castle Bad", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 },
++
++    // Hobbiton of the "Stín nad Krajem" expansion, still pictures in icons.lod instead of movies.
++    { "krajnora", 8, 0, HOUSE_TYPE_HOUSE, 0, 0 },
++    { "krajhospoda", 0xD, 615, HOUSE_TYPE_TAVERN, 49, 0 },
++    { "krajobchod", 0xE, 9, HOUSE_TYPE_ALCHEMY_SHOP, 0, 0 },
++    { "krajlecitel", 0x24, 171, HOUSE_TYPE_TEMPLE, 50, 3 },
++    { "krajkovar", 0x16, 613, HOUSE_TYPE_WEAPON_SHOP, 45, 4 }
+ } };
+ 
+ const IndexedArray<int, HOUSE_TYPE_WEAPON_SHOP, HOUSE_TYPE_DARK_GUILD> itemAmountInShop = {{
+diff --git a/src/GUI/UI/UIHouses.h b/src/GUI/UI/UIHouses.h
+index d47c9bb4..19a70943 100644
+--- a/src/GUI/UI/UIHouses.h
++++ b/src/GUI/UI/UIHouses.h
+@@ -142,7 +142,7 @@ struct HouseAnimDescr {
+ 
+ extern GraphicsImage *_591428_endcap;
+ 
+-extern std::array<const HouseAnimDescr, 196> pAnimatedRooms;
++extern std::array<const HouseAnimDescr, 201> pAnimatedRooms;
+ 
+ extern const IndexedArray<int, HOUSE_TYPE_WEAPON_SHOP, HOUSE_TYPE_DARK_GUILD> itemAmountInShop;
+ 
+diff --git a/src/Media/MediaPlayer.cpp b/src/Media/MediaPlayer.cpp
+index 2a29a0fb..a75f1c51 100644
+--- a/src/Media/MediaPlayer.cpp
++++ b/src/Media/MediaPlayer.cpp
+@@ -29,6 +29,8 @@ extern "C" {
+ #include "Engine/EngineGlobals.h"
+ #include "Engine/Graphics/Renderer/Renderer.h"
+ #include "Engine/Graphics/Image.h"
++#include "Engine/AssetsManager.h"
++#include "Engine/Resources/LodTextureCache.h"
+ #include "Engine/Timer.h"
+ 
+ #include "GUI/GUIMessageQueue.h"
+@@ -766,8 +768,12 @@ void MPlayer::OpenHouseMovie(std::string_view pMovieName, bool bLoop) {
+     gameTimer->setPaused(true);
+     pAudioPlayer->pauseLooping();
+     pAudioPlayer->MusicPause();
++    _houseStill = nullptr;
+     Blob blob = LoadMovie(pMovieName);
+     if (!blob) {
++        // Houses of the "Stín nad Krajem" expansion have a still picture from icons.lod instead of a movie.
++        if (pIcons_LOD->loadTexture(pMovieName, false))
++            _houseStill = assets->getImage_Solid(pMovieName);
+         return;
+     }
+ 
+@@ -778,6 +784,18 @@ void MPlayer::OpenHouseMovie(std::string_view pMovieName, bool bLoop) {
+ }
+ 
+ void MPlayer::HouseMovieLoop() {
++    if (!pMovie_Track && _houseStill) {
++        Sizei wsize = render->GetRenderDimensions();
++        Recti rect;
++        rect.x = render->config->graphics.HouseMovieX1.value();
++        rect.y = render->config->graphics.HouseMovieY1.value();
++        rect.w = wsize.w - render->config->graphics.HouseMovieX2.value();
++        rect.h = wsize.h - render->config->graphics.HouseMovieY2.value();
++        render->BeginScene2D();
++        render->DrawImage(_houseStill, rect);
++        return;
++    }
++
+     if (!pMovie_Track || engine->config->debug.NoVideo.value()) {
+         return;
+     }
+@@ -955,6 +973,7 @@ void MPlayer::Unload() {
+         pMovie_Track->Stop();
+     }
+     pMovie_Track = nullptr;
++    _houseStill = nullptr;
+     if (!GameOverNoSound) {
+         pAudioPlayer->MusicResume();
+         pAudioPlayer->resumeSounds();
+diff --git a/src/Media/MediaPlayer.h b/src/Media/MediaPlayer.h
+index bb8a6319..4a614adc 100644
+--- a/src/Media/MediaPlayer.h
++++ b/src/Media/MediaPlayer.h
+@@ -17,6 +17,7 @@
+ 
+ class VideoList;
+ class FFmpegLogProxy;
++class GraphicsImage;
+ 
+ class MPlayer {
+  public:
+@@ -42,6 +43,7 @@ class MPlayer {
+     VidReader might_list;
+     VidReader magic_list;
+     std::string sInHouseMovie;
++    GraphicsImage *_houseStill = nullptr; // Picture shown instead of a house movie, see OpenHouseMovie.
+ 
+     Blob LoadMovie(std::string_view video_name);
+ };

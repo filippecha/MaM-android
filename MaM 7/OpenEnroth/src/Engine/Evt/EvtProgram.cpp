@@ -43,6 +43,11 @@ void EvtProgram::add(int eventId, EvtInstruction ir) {
     _eventsById[eventId].push_back(std::move(ir));
 }
 
+void EvtProgram::merge(const EvtProgram &other) {
+    for (const auto &[eventId, events] : other._eventsById)
+        _eventsById[eventId] = events;
+}
+
 void EvtProgram::clear() {
     _eventsById.clear();
 }

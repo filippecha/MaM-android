@@ -1,7 +1,9 @@
 #include "KeyboardInputHandler.h"
 
+#include <chrono>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "Engine/Graphics/Indoor.h"
 #include "Engine/Graphics/Weather.h"
@@ -15,6 +17,9 @@
 
 #include "GUI/GUIWindow.h"
 #include "GUI/GUIMessageQueue.h"
+#include "GUI/UI/UIStatusBar.h"
+
+#include "Library/Logger/Logger.h"
 
 #include "InputEnumFunctions.h"
 #include "Mouse.h"
@@ -61,6 +66,13 @@ static bool PartyMove(PartyAction direction) {
 
 void Io::KeyboardInputHandler::GenerateActions(bool isPaused) {
     bool resettimer = true;
+    // Ours: any other key pressed breaks the row of yells of the immortality cheat (the yell key itself is bound
+    // to other actions too, "yes" for one, so the keys are compared, not the actions).
+    for (InputAction action : allInputActions())
+        for (PlatformKey key : {actionMapping->keyFor(action), actionMapping->gamepadKeyFor(action)})
+            if (key != PlatformKey::KEY_NONE && key != actionMapping->keyFor(INPUT_ACTION_YELL) &&
+                key != actionMapping->gamepadKeyFor(INPUT_ACTION_YELL) && controller->isKeyPressedThisFrame(key))
+                _yellCount = 0;
     for (InputAction action : allInputActions()) {
         bool isTriggered = false;
         for (PlatformKey key : {actionMapping->keyFor(action), actionMapping->gamepadKeyFor(action)}) {
@@ -196,6 +208,21 @@ void Io::KeyboardInputHandler::ProcessGameplayAction(InputAction action) {
         if (current_screen_type == SCREEN_GAME && pParty->hasActiveCharacter()) {
             pParty->yell();
             pParty->activeCharacter().playReaction(SPEECH_YELL);
+        }
+        // Ours: ten yells in a row (real presses, each within two seconds of the one before, nothing else between)
+        // switch the immortality cheat on, ten more off. Holding the key doesn't count.
+        if (current_screen_type == SCREEN_GAME && controller->isKeyPressedThisFrame(actionMapping->keyFor(INPUT_ACTION_YELL))) {
+            auto now = std::chrono::steady_clock::now();
+            if (now - _lastYell > std::chrono::seconds(2))
+                _yellCount = 0;
+            _lastYell = now;
+            if (++_yellCount >= 10) {
+                _yellCount = 0;
+                cheatImmortal = !cheatImmortal;
+                MM_INFO("MaM 7 cheat: immortality {}", cheatImmortal ? "on" : "off");
+                engine->_statusBar->setEvent(cheatImmortal ? "Nesmrtelnost a neomezen\xe1 mana zapnuta"
+                                                           : "Nesmrtelnost a neomezen\xe1 mana vypnuta");
+            }
         }
         break;
 

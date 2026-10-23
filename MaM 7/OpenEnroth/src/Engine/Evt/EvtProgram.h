@@ -18,6 +18,13 @@ class EvtProgram {
     static EvtProgram load(const Blob &rawData);
 
     void add(int eventId, EvtInstruction ir);
+
+    /**
+     * Adds all events of another program, events with the same ids are replaced.
+     *
+     * @param other                     Program to take the events from.
+     */
+    void merge(const EvtProgram &other);
     void clear();
 
     bool hasEvent(int eventId) const {

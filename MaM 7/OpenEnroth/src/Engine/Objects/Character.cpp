@@ -325,6 +325,8 @@ int Character::GetConditionDaysPassed(Condition condition) const {
 
 //----- (004160CA) --------------------------------------------------------
 void Character::ItemsPotionDmgBreak(int count) {
+    if (cheatImmortal)
+        return;
     std::vector<InventoryEntry> entries;
     for (InventoryEntry entry : inventory.entries())
         if (isRegular(entry->itemId))
@@ -560,18 +562,22 @@ int Character::GetMeditation() const {
 
 //----- (004910D3) --------------------------------------------------------
 bool Character::CanIdentify(const Item &item) const {
-    CombinedSkillValue val = getActualSkillValue(SKILL_ITEM_ID);
-    int multiplier =
-        GetMultiplierForSkillLevel(SKILL_ITEM_ID, 1, 2, 3, 5);
-
-    if (CheckHiredNPCSpeciality(Scholar) || val.mastery() == MASTERY_GRANDMASTER)  // always identify
+    if (CheckHiredNPCSpeciality(Scholar))  // always identify
         return true;
 
-    // check item level against skill
-    bool result = (multiplier * val.level()) >=
-                  pItemTable->items[item.itemId].identifyAndRepairDifficulty;
+    // Ours: the whole party identifies as well as its best identifier does.
+    int best = 0;
+    for (const Character &other : pParty->pCharacters) {
+        if (other.conditions.has(CONDITION_DEAD) || other.conditions.has(CONDITION_ERADICATED))
+            continue;
+        CombinedSkillValue val = other.getActualSkillValue(SKILL_ITEM_ID);
+        if (val.mastery() == MASTERY_GRANDMASTER)
+            return true;
+        best = std::max(best, other.GetMultiplierForSkillLevel(SKILL_ITEM_ID, 1, 2, 3, 5) * val.level());
+    }
 
-    return result;
+    // check item level against skill
+    return best >= pItemTable->items[item.itemId].identifyAndRepairDifficulty;
 }
 
 //----- (00491151) --------------------------------------------------------
@@ -1303,6 +1309,9 @@ int Character::receiveDamage(signed int amount, DamageType dmg_type) {
     conditions.reset(CONDITION_SLEEP);  // wake up if asleep
     signed int recieved_dmg = CalculateIncommingDamage(dmg_type, amount);  // get damage
     // for no damage cheat - moved from elsewhere
+    if (cheatImmortal) {
+        recieved_dmg = 0;  // Ours: nothing hurts.
+    }
     if (!engine->config->debug.NoDamage.value()) {
         health -= recieved_dmg;     // reduce health
     }

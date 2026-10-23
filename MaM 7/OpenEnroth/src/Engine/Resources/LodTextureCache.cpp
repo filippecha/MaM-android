@@ -23,6 +23,15 @@ void LodTextureCache::open(Blob blob) {
     _reader.open(std::move(blob));
 }
 
+void LodTextureCache::openKraj(Blob blob) {
+    _krajReader.open(std::move(blob));
+    _hasKraj = true;
+}
+
+const LodReader &LodTextureCache::readerFor(std::string_view pContainer) const {
+    return _hasKraj && _krajReader.exists(pContainer) ? _krajReader : _reader;
+}
+
 void LodTextureCache::reserveLoadedTextures() {
     _reservedCount = _texturesInOrder.size();
 }
@@ -57,17 +66,18 @@ LodImage *LodTextureCache::loadTexture(std::string_view pContainer, bool useDumm
 }
 
 Blob LodTextureCache::LoadCompressedTexture(std::string_view pContainer) {
-    return lod::decodeMaybeCompressed(_reader.read(pContainer));
+    return lod::decodeMaybeCompressed(readerFor(pContainer).read(pContainer));
 }
 
 Blob LodTextureCache::read(std::string_view pContainer) {
-    return _reader.read(pContainer);
+    return readerFor(pContainer).read(pContainer);
 }
 
 bool LodTextureCache::LoadTextureFromLOD(LodImage *pOutTex, std::string_view pContainer) {
-    if (!_reader.exists(pContainer))
+    const LodReader &reader = readerFor(pContainer);
+    if (!reader.exists(pContainer))
         return false;
 
-    *pOutTex = lod::decodeImage(_reader.read(pContainer));
+    *pOutTex = lod::decodeImage(reader.read(pContainer));
     return true;
 }

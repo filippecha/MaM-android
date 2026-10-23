@@ -1,0 +1,15 @@
+diff --git a/src/Engine/Graphics/Indoor.cpp b/src/Engine/Graphics/Indoor.cpp
+index 3957c15f..29b1b526 100644
+--- a/src/Engine/Graphics/Indoor.cpp
++++ b/src/Engine/Graphics/Indoor.cpp
+@@ -1463,6 +1463,10 @@ void BLV_ProcessPartyActions() {  // could this be combined with odm process act
+         }
+     }
+ 
++    // Risers can be ethereal, e.g. in the Titans' Stronghold, and the party walks through them and under the next step.
++    if (pParty->pos.z < floorZ && floorZ - pParty->pos.z < 128 && pIndoor->faces[faceId].polygonType != POLYGON_Ceiling)
++        pParty->pos.z = floorZ;
++
+     int fall_start;
+     if (pParty->FeatherFallActive() || pParty->wearsItem(ITEM_ARTIFACT_LADYS_ESCORT)
+         || pParty->uFlags & (PARTY_FLAG_LANDING | PARTY_FLAG_JUMPING)) {

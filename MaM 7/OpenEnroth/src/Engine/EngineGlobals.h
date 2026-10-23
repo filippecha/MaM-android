@@ -7,6 +7,9 @@
 
 class PlatformApplication;
 
+/** Ours: called once per frame from every message loop of the game (the gamepad cursor, the periodic autosave). */
+extern void (*frameHook)();
+
 namespace detail {
 void globalProcessMessages();
 void globalWaitForMessages();

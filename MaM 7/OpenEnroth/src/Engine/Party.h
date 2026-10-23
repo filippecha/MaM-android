@@ -391,6 +391,13 @@ struct Party {
 
 extern Party *pParty;  // idb
 
+/**
+ * Our cheat: ten presses of the yell key (Y) in a row switch it on, ten more off. The characters take no damage
+ * and their health and spell points stay full. It lives only in memory: loading a game, a new game and quitting
+ * the game turn it off (loadGame(), saveNewGame(), Party::Reset()).
+ */
+extern bool cheatImmortal;
+
 extern ActionQueue *pPartyActionQueue;
 
 bool TestPartyQuestBit(QuestBit bit);

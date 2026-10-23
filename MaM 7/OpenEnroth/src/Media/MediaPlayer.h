@@ -17,6 +17,7 @@
 
 class VideoList;
 class FFmpegLogProxy;
+class GraphicsImage;
 
 class MPlayer {
  public:
@@ -42,6 +43,7 @@ class MPlayer {
     VidReader might_list;
     VidReader magic_list;
     std::string sInHouseMovie;
+    GraphicsImage *_houseStill = nullptr; // Picture shown instead of a house movie, see OpenHouseMovie.
 
     Blob LoadMovie(std::string_view video_name);
 };

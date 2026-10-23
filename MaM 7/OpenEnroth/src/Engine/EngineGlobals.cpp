@@ -12,8 +12,12 @@ PlatformEventHandler *eventHandler = nullptr;
 PlatformApplication *application = nullptr;
 
 
+void (*frameHook)() = nullptr;
+
 void detail::globalProcessMessages() {
     application->processMessages();
+    if (frameHook)
+        frameHook();
 
     // Shows the on-screen keyboard on mobile while the player types a name.
     if (window && keyboardInputHandler) {

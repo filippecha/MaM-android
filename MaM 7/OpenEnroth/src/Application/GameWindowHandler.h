@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <tuple>
 #include <vector>
@@ -65,7 +66,20 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
     virtual bool gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) override;
     virtual bool gamepadAxisEvent(const PlatformGamepadAxisEvent *event) override;
 
+ public:
+    /**
+     * Ours: once per frame. On any screen but the 3D view (menus, windows, dialogs, houses) the sticks move the mouse
+     * cursor, A clicks, X right-clicks, B is Escape, the d-pad nudges the cursor. In the 3D view the game's own
+     * bindings apply (left stick walks, right stick looks).
+     */
+    void gamepadTick();
+    /** True while the gamepad works as a mouse. */
+    bool gamepadCursorMode() const;
+
  private:
     std::shared_ptr<Io::Mouse> mouse = nullptr;
     bool _closing = false;
+    float _padCursorX = 0, _padCursorY = 0;  // The sticks' tilt for the cursor, -1..1.
+    std::chrono::steady_clock::time_point _padTickTime;
+    bool _padLeftDown = false, _padRightDown = false;
 };

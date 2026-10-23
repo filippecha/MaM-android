@@ -1,0 +1,255 @@
+diff --git a/MaM 7/OpenEnroth/src/Application/Game.cpp b/MaM 7/OpenEnroth/src/Application/Game.cpp
+index 220df5d4..5b0bd725 100644
+--- a/MaM 7/OpenEnroth/src/Application/Game.cpp	
++++ b/MaM 7/OpenEnroth/src/Application/Game.cpp	
+@@ -1428,6 +1428,10 @@ void Game::processQueuedMessages() {
+                 engine->_messageQueue->clear();
+                 GameUI_OnPlayerPortraitLeftClick(uMessageParam);
+                 continue;
++            case UIMSG_CHEST_TakeAll:
++                if (current_screen_type == SCREEN_CHEST)
++                    Chest::GrabItem(true);
++                continue;
+             case UIMSG_CHEST_ClickItem:
+                 if (current_screen_type == SCREEN_CHEST_INVENTORY) {
+                     pParty->activeCharacter().OnInventoryLeftClick();
+diff --git a/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp b/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp
+index 8e3d69b0..b60f28de 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp	
+@@ -325,6 +325,8 @@ int Character::GetConditionDaysPassed(Condition condition) const {
+ 
+ //----- (004160CA) --------------------------------------------------------
+ void Character::ItemsPotionDmgBreak(int count) {
++    if (cheatImmortal)
++        return;
+     std::vector<InventoryEntry> entries;
+     for (InventoryEntry entry : inventory.entries())
+         if (isRegular(entry->itemId))
+@@ -560,18 +562,22 @@ int Character::GetMeditation() const {
+ 
+ //----- (004910D3) --------------------------------------------------------
+ bool Character::CanIdentify(const Item &item) const {
+-    CombinedSkillValue val = getActualSkillValue(SKILL_ITEM_ID);
+-    int multiplier =
+-        GetMultiplierForSkillLevel(SKILL_ITEM_ID, 1, 2, 3, 5);
+-
+-    if (CheckHiredNPCSpeciality(Scholar) || val.mastery() == MASTERY_GRANDMASTER)  // always identify
++    if (CheckHiredNPCSpeciality(Scholar))  // always identify
+         return true;
+ 
+-    // check item level against skill
+-    bool result = (multiplier * val.level()) >=
+-                  pItemTable->items[item.itemId].identifyAndRepairDifficulty;
++    // Ours: the whole party identifies as well as its best identifier does.
++    int best = 0;
++    for (const Character &other : pParty->pCharacters) {
++        if (other.conditions.has(CONDITION_DEAD) || other.conditions.has(CONDITION_ERADICATED))
++            continue;
++        CombinedSkillValue val = other.getActualSkillValue(SKILL_ITEM_ID);
++        if (val.mastery() == MASTERY_GRANDMASTER)
++            return true;
++        best = std::max(best, other.GetMultiplierForSkillLevel(SKILL_ITEM_ID, 1, 2, 3, 5) * val.level());
++    }
+ 
+-    return result;
++    // check item level against skill
++    return best >= pItemTable->items[item.itemId].identifyAndRepairDifficulty;
+ }
+ 
+ //----- (00491151) --------------------------------------------------------
+diff --git a/MaM 7/OpenEnroth/src/Engine/Party.cpp b/MaM 7/OpenEnroth/src/Engine/Party.cpp
+index 8a2920a0..4738b4be 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Party.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Party.cpp	
+@@ -625,9 +625,9 @@ void Party::updateCharactersAndHirelingsEmotions() {
+     // The immortality cheat: everybody healthy and full of spell points, every frame.
+     if (cheatImmortal) {
+         for (Character &player : this->pCharacters) {
+-            player.conditions.reset(CONDITION_UNCONSCIOUS);
+-            player.conditions.reset(CONDITION_DEAD);
+-            player.conditions.reset(CONDITION_ERADICATED);
++            for (Condition condition : allConditions())
++                if (condition != CONDITION_SLEEP && condition != CONDITION_ZOMBIE && condition != CONDITION_GOOD)
++                    player.conditions.reset(condition);
+             player.health = player.GetMaxHealth();
+             player.mana = player.GetMaxMana();
+         }
+diff --git a/MaM 7/OpenEnroth/src/GUI/GUIEnums.h b/MaM 7/OpenEnroth/src/GUI/GUIEnums.h
+index 5ff5a6b0..a118a361 100644
+--- a/MaM 7/OpenEnroth/src/GUI/GUIEnums.h	
++++ b/MaM 7/OpenEnroth/src/GUI/GUIEnums.h	
+@@ -213,6 +213,7 @@ enum UIMessageType : uint32_t {
+     UIMSG_MMT_MainMenu_Continue = 429,
+ 
+     UIMSG_SaveLoadScroll = 970,
++    UIMSG_CHEST_TakeAll = 971,  // Ours.
+ 
+     // OE-specific UIMSG values.
+     UIMSG_QuickSave = 2000,
+diff --git a/MaM 7/OpenEnroth/src/GUI/GUIFont.h b/MaM 7/OpenEnroth/src/GUI/GUIFont.h
+index 31e05702..6f24ec35 100644
+--- a/MaM 7/OpenEnroth/src/GUI/GUIFont.h	
++++ b/MaM 7/OpenEnroth/src/GUI/GUIFont.h	
+@@ -100,10 +100,10 @@ class GUIFont {
+                           Color secondColor, Color shadowColor, std::string_view pString,
+                           RgbaImage *image);
+     int GetStringHeightWithSecondFont(GUIFont *secondFont, std::string_view text_str, int width, int x);
++    void DrawTextLineToBuff(Color startColor, Color shadowColor, Color *uX_buff_pos, std::string_view text, int line_width);
+ 
+  private:
+     std::string FitTwoFontStringInWindow(std::string_view inString, GUIFont *pFontSecond, int width, int x);
+-    void DrawTextLineToBuff(Color startColor, Color shadowColor, Color *uX_buff_pos, std::string_view text, int line_width);
+ 
+  private:
+     LodFont _font;
+diff --git a/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp b/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp
+index ab0f93e8..6d1be67c 100644
+--- a/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp	
++++ b/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp	
+@@ -1,5 +1,8 @@
+ #include "UIChest.h"
+ 
++#include <algorithm>
++#include <utility>
++
+ #include "Engine/Graphics/Renderer/Renderer.h"
+ #include "Engine/Graphics/Image.h"
+ #include "Engine/Localization.h"
+@@ -10,6 +13,7 @@
+ #include "Engine/Tables/ChestTable.h"
+ 
+ #include "GUI/GUIButton.h"
++#include "GUI/GUIFont.h"
+ #include "GUI/UI/ItemGrid.h"
+ 
+ GUIWindow_Chest::GUIWindow_Chest(int chestId) : GUIWindow(WINDOW_Chest, {0, 0}, render->GetRenderDimensions()), _chestId(chestId) {
+@@ -18,10 +22,54 @@ GUIWindow_Chest::GUIWindow_Chest(int chestId) : GUIWindow(WINDOW_Chest, {0, 0},
+     pBtn_ExitCancel = CreateButton({471, 445}, {169, 35}, BUTTON_TYPE_NORMAL, 0, UIMSG_Escape, 0, INPUT_ACTION_INVALID,
+                                    localization->str(LSTR_EXIT_DIALOGUE), {ui_exit_cancel_button_background});
+     CreateButton({7, 8}, {460, 343}, BUTTON_TYPE_NORMAL, 0, UIMSG_CHEST_ClickItem, 0);
++    // Ours: everything out of the chest at once, above the exit button.
++    _takeAllButton = CreateButton({471, 400}, {169, 35}, BUTTON_TYPE_NORMAL, 0, UIMSG_CHEST_TakeAll, 0, INPUT_ACTION_INVALID,
++                                  "Vz\xedt v\x9a" "e", {ui_exit_cancel_button_background});
++    RgbaImage plaque = RgbaImage::copy(ui_exit_cancel_button_background->rgba());
++    if (plaque.width() == 169 && plaque.height() == 35) {
++        // The caption sits on the plaque at x 53..118, y 8..27. The 14 blank columns left of it repeat over it.
++        for (int y = 8; y < 28; y++)
++            for (int x = 53; x < 119; x++)
++                plaque[y][x] = plaque[y][53 + (x - 53) % 14];
++    }
++    // The caption goes into the texture like the baked ones: two pixels wide and blurred, so that the phone's
++    // upscaling leaves it as dark and smooth as "Zavřít" below it.
++    GUIFont *font = assets->pFontArrus.get();
++    RgbaImage text = RgbaImage::solid(Color(), plaque.width(), plaque.height() + font->GetHeight() + 2);
++    int textX = std::max(0, (plaque.width() - font->GetLineWidth(_takeAllButton->label) - 1) / 2);
++    font->DrawTextLineToBuff(colorTable.White, Color(), &text[10][textX], _takeAllButton->label, text.width());
++    for (int y = 0; y < text.height(); y++)
++        for (int x = text.width() - 1; x > 0; x--)
++            if (text[y][x - 1].a)
++                text[y][x] = text[y][x - 1];
++    static const int kernel[3][3] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
++    for (int y = 1; y < plaque.height() - 1; y++) {
++        for (int x = 1; x < plaque.width() - 1; x++) {
++            int coverage = 16;  // The stroke itself is black, its surroundings only darken to half the stroke's weight.
++            if (!text[y][x].a) {
++                coverage = 0;
++                for (int ky = -1; ky <= 1; ky++)
++                    for (int kx = -1; kx <= 1; kx++)
++                        if (text[y + ky][x + kx].a)
++                            coverage += kernel[ky + 1][kx + 1];
++                coverage /= 2;
++            }
++            Color &pixel = plaque[y][x];
++            pixel.r = pixel.r * (16 - coverage) / 16;
++            pixel.g = pixel.g * (16 - coverage) / 16;
++            pixel.b = pixel.b * (16 - coverage) / 16;
++        }
++    }
++    _takeAllTexture = GraphicsImage::Create(std::move(plaque));
+     current_screen_type = SCREEN_CHEST;
+     gameTimer->setPaused(true);
+ }
+ 
++GUIWindow_Chest::~GUIWindow_Chest() {
++    if (_takeAllTexture)
++        _takeAllTexture->release();
++}
++
+ void GUIWindow_Chest::Update() {
+     if (current_screen_type == SCREEN_CHEST_INVENTORY && pParty->hasActiveCharacter()) {
+         draw_leather();
+@@ -58,5 +106,7 @@ void GUIWindow_Chest::Update() {
+         }
+ 
+         render->DrawQuad2D(ui_exit_cancel_button_background, pBtn_ExitCancel->rect.topLeft());
++        if (_takeAllButton)
++            render->DrawQuad2D(_takeAllTexture, _takeAllButton->rect.topLeft());
+     }
+ }
+diff --git a/MaM 7/OpenEnroth/src/GUI/UI/UIChest.h b/MaM 7/OpenEnroth/src/GUI/UI/UIChest.h
+index ddb0bb74..87490132 100644
+--- a/MaM 7/OpenEnroth/src/GUI/UI/UIChest.h	
++++ b/MaM 7/OpenEnroth/src/GUI/UI/UIChest.h	
+@@ -5,7 +5,7 @@
+ class GUIWindow_Chest : public GUIWindow {
+  public:
+     explicit GUIWindow_Chest(int chestId);
+-    virtual ~GUIWindow_Chest() {}
++    virtual ~GUIWindow_Chest();
+ 
+     virtual void Update() override;
+ 
+@@ -15,4 +15,6 @@ class GUIWindow_Chest : public GUIWindow {
+ 
+  private:
+     int _chestId = 0;
++    GUIButton *_takeAllButton = nullptr;
++    GraphicsImage *_takeAllTexture = nullptr;  // The exit button's plaque with its baked-in caption tiled over.
+ };
+diff --git a/MaM 7/OpenEnroth/src/GUI/UI/UIPopup.cpp b/MaM 7/OpenEnroth/src/GUI/UI/UIPopup.cpp
+index a0259ecd..dd61ba9b 100644
+--- a/MaM 7/OpenEnroth/src/GUI/UI/UIPopup.cpp	
++++ b/MaM 7/OpenEnroth/src/GUI/UI/UIPopup.cpp	
+@@ -730,28 +730,32 @@ std::pair<int, int> MonsterPopup_Draw(unsigned int uActorID, Recti* pWindow) {
+ 
+     if (pParty->hasActiveCharacter()) {
+         Mastery skill_mastery = MASTERY_NONE;
+-        CombinedSkillValue idMonsterSkill = pParty->activeCharacter().getActualSkillValue(SKILL_MONSTER_ID);
+-        int skill_points = idMonsterSkill.level();
+-
+-        if (skill_points > 0) {
+-            skill_mastery = idMonsterSkill.mastery();
+-            if (skill_mastery == MASTERY_NOVICE) {
++        // Every living character tries, the party learns whatever any of them recognizes.
++        for (const Character &other : pParty->pCharacters) {
++            if (other.conditions.has(CONDITION_DEAD) || other.conditions.has(CONDITION_ERADICATED))
++                continue;
++            CombinedSkillValue idMonsterSkill = other.getActualSkillValue(SKILL_MONSTER_ID);
++            int skill_points = idMonsterSkill.level();
++            if (skill_points <= 0)
++                continue;
++            skill_mastery = std::max(skill_mastery, idMonsterSkill.mastery());
++            if (idMonsterSkill.mastery() == MASTERY_NOVICE) {
+                 if (skill_points + 10 >= monsterInfo.level) {
+                     normal_level = true;
+                 }
+-            } else if (skill_mastery == MASTERY_EXPERT) {
++            } else if (idMonsterSkill.mastery() == MASTERY_EXPERT) {
+                 if (2 * skill_points + 10 >= monsterInfo.level) {
+                     normal_level = true;
+                     expert_level = true;
+                 }
+-            } else if (skill_mastery == MASTERY_MASTER) {
++            } else if (idMonsterSkill.mastery() == MASTERY_MASTER) {
+                 if (3 * skill_points + 10 >= monsterInfo.level) {
+                     normal_level = true;
+                     expert_level = true;
+                     master_level = true;
+                     for_effects = true;
+                 }
+-            } else if (skill_mastery == MASTERY_GRANDMASTER) {
++            } else if (idMonsterSkill.mastery() == MASTERY_GRANDMASTER) {
+                 normal_level = true;
+                 expert_level = true;
+                 master_level = true;

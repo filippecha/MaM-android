@@ -2897,7 +2897,7 @@ void ArcomageGame::PrepareArcomage() {
 
 void SetStartConditions() {
     const ArcomageStartConditions *st_cond;
-    st_cond = &start_conditions[window_SpeakInHouse->houseId()];
+    st_cond = &start_conditions[arcomageRulesTavern(window_SpeakInHouse->houseId())];
 
     // set start conditions
     start_tower_height = st_cond->tower_height;

@@ -89,6 +89,13 @@ void GameStarter::initialize() {
 #endif
         MM_INFO("Could not read configuration file '{}'! Loaded default configuration instead!", ufs->displayPath(configName));
     }
+    // The saved config holds every binding, so the old gamepad layout survives an update: Y opened the inventory
+    // and jumped at once. The inventory goes to the d-pad's top, where the autonotes were (the quest book has a tab for them).
+    if (_config->gamepad.Inventory.value() == PlatformKey::KEY_GAMEPAD_Y && _config->gamepad.Jump.value() == PlatformKey::KEY_GAMEPAD_Y) {
+        _config->gamepad.Inventory.setValue(PlatformKey::KEY_GAMEPAD_UP);
+        if (_config->gamepad.AutoNotes.value() == PlatformKey::KEY_GAMEPAD_UP)
+            _config->gamepad.AutoNotes.setValue(PlatformKey::KEY_NONE);
+    }
     MM_INFO("Built in resource override is {}.", _config->debug.OverrideBuiltInResources.value() ? "enabled" : "disabled");
 
     // Patch config.

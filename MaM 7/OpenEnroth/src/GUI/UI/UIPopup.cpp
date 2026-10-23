@@ -730,28 +730,32 @@ std::pair<int, int> MonsterPopup_Draw(unsigned int uActorID, Recti* pWindow) {
 
     if (pParty->hasActiveCharacter()) {
         Mastery skill_mastery = MASTERY_NONE;
-        CombinedSkillValue idMonsterSkill = pParty->activeCharacter().getActualSkillValue(SKILL_MONSTER_ID);
-        int skill_points = idMonsterSkill.level();
-
-        if (skill_points > 0) {
-            skill_mastery = idMonsterSkill.mastery();
-            if (skill_mastery == MASTERY_NOVICE) {
+        // Every living character tries, the party learns whatever any of them recognizes.
+        for (const Character &other : pParty->pCharacters) {
+            if (other.conditions.has(CONDITION_DEAD) || other.conditions.has(CONDITION_ERADICATED))
+                continue;
+            CombinedSkillValue idMonsterSkill = other.getActualSkillValue(SKILL_MONSTER_ID);
+            int skill_points = idMonsterSkill.level();
+            if (skill_points <= 0)
+                continue;
+            skill_mastery = std::max(skill_mastery, idMonsterSkill.mastery());
+            if (idMonsterSkill.mastery() == MASTERY_NOVICE) {
                 if (skill_points + 10 >= monsterInfo.level) {
                     normal_level = true;
                 }
-            } else if (skill_mastery == MASTERY_EXPERT) {
+            } else if (idMonsterSkill.mastery() == MASTERY_EXPERT) {
                 if (2 * skill_points + 10 >= monsterInfo.level) {
                     normal_level = true;
                     expert_level = true;
                 }
-            } else if (skill_mastery == MASTERY_MASTER) {
+            } else if (idMonsterSkill.mastery() == MASTERY_MASTER) {
                 if (3 * skill_points + 10 >= monsterInfo.level) {
                     normal_level = true;
                     expert_level = true;
                     master_level = true;
                     for_effects = true;
                 }
-            } else if (skill_mastery == MASTERY_GRANDMASTER) {
+            } else if (idMonsterSkill.mastery() == MASTERY_GRANDMASTER) {
                 normal_level = true;
                 expert_level = true;
                 master_level = true;

@@ -472,8 +472,11 @@ void Party::createDefaultParty() {
 }
 
 //----- (004917CE) --------------------------------------------------------
+bool cheatImmortal = false;
+
 void Party::Reset() {
     Zero();
+    cheatImmortal = false;
 
     eyeLevel = engine->config->gameplay.PartyEyeLevel.value();
     uNumGold = engine->config->gameplay.NewGameGold.value();
@@ -618,6 +621,16 @@ void Party::resetCharacterEmotions() {
 void Party::updateCharactersAndHirelingsEmotions() {
     if (pParty->cNonHireFollowers < 0) {
         pParty->CountHirelings();
+    }
+    // The immortality cheat: everybody healthy and full of spell points, every frame.
+    if (cheatImmortal) {
+        for (Character &player : this->pCharacters) {
+            for (Condition condition : allConditions())
+                if (condition != CONDITION_SLEEP && condition != CONDITION_ZOMBIE && condition != CONDITION_GOOD)
+                    player.conditions.reset(condition);
+            player.health = player.GetMaxHealth();
+            player.mana = player.GetMaxMana();
+        }
     }
 
     for (Character &player : this->pCharacters) {

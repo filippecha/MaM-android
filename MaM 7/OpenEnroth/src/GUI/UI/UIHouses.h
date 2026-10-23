@@ -142,7 +142,7 @@ struct HouseAnimDescr {
 
 extern GraphicsImage *_591428_endcap;
 
-extern std::array<const HouseAnimDescr, 196> pAnimatedRooms;
+extern std::array<const HouseAnimDescr, 201> pAnimatedRooms;
 
 extern const IndexedArray<int, HOUSE_TYPE_WEAPON_SHOP, HOUSE_TYPE_DARK_GUILD> itemAmountInShop;
 

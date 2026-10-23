@@ -29,6 +29,8 @@ extern "C" {
 #include "Engine/EngineGlobals.h"
 #include "Engine/Graphics/Renderer/Renderer.h"
 #include "Engine/Graphics/Image.h"
+#include "Engine/AssetsManager.h"
+#include "Engine/Resources/LodTextureCache.h"
 #include "Engine/Timer.h"
 
 #include "GUI/GUIMessageQueue.h"
@@ -766,8 +768,12 @@ void MPlayer::OpenHouseMovie(std::string_view pMovieName, bool bLoop) {
     gameTimer->setPaused(true);
     pAudioPlayer->pauseLooping();
     pAudioPlayer->MusicPause();
+    _houseStill = nullptr;
     Blob blob = LoadMovie(pMovieName);
     if (!blob) {
+        // Houses of the "Stín nad Krajem" expansion have a still picture from icons.lod instead of a movie.
+        if (pIcons_LOD->loadTexture(pMovieName, false))
+            _houseStill = assets->getImage_Solid(pMovieName);
         return;
     }
 
@@ -778,6 +784,18 @@ void MPlayer::OpenHouseMovie(std::string_view pMovieName, bool bLoop) {
 }
 
 void MPlayer::HouseMovieLoop() {
+    if (!pMovie_Track && _houseStill) {
+        Sizei wsize = render->GetRenderDimensions();
+        Recti rect;
+        rect.x = render->config->graphics.HouseMovieX1.value();
+        rect.y = render->config->graphics.HouseMovieY1.value();
+        rect.w = wsize.w - render->config->graphics.HouseMovieX2.value();
+        rect.h = wsize.h - render->config->graphics.HouseMovieY2.value();
+        render->BeginScene2D();
+        render->DrawImage(_houseStill, rect);
+        return;
+    }
+
     if (!pMovie_Track || engine->config->debug.NoVideo.value()) {
         return;
     }
@@ -955,6 +973,7 @@ void MPlayer::Unload() {
         pMovie_Track->Stop();
     }
     pMovie_Track = nullptr;
+    _houseStill = nullptr;
     if (!GameOverNoSound) {
         pAudioPlayer->MusicResume();
         pAudioPlayer->resumeSounds();

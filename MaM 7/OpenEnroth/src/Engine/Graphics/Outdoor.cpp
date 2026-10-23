@@ -277,6 +277,45 @@ bool OutdoorLocation::Initialize(std::string_view filename, int days_played,
     return false;
 }
 
+/**
+ * The Shire of the "Stín nad Krajem" expansion gains models and decorations as the expansion grows, and its delta in
+ * a save of an older version can't be read with the newer map. The counts at the start of the delta tell.
+ */
+static bool deltaFitsLocation(const Blob &delta, const OutdoorLocation_MM7 &location) {
+    LocationHeader_MM7 header;
+    if (delta.size() < sizeof(header))
+        return false;
+    std::memcpy(&header, delta.data(), sizeof(header));
+
+    size_t totalFaces = 0;
+    for (const BSPModelData_MM7 &model : location.models)
+        totalFaces += model.numFaces;
+    return header.totalFacesCount == totalFaces && header.bmodelCount == location.models.size() &&
+           header.decorationCount == location.decorations.size();
+}
+
+bool isShireInstalled() {
+    return !pMapTable->pInfos[MAP_SHIRE].fileName.empty();
+}
+
+/**
+ * The mountains along the north edge of Tatalia close it off. With the "Stín nad Krajem" expansion a pass leads from
+ * the snowy plateau north to the edge of the map, where the party can travel on to the Shire.
+ */
+static void carveTataliaPass(OutdoorLocation_MM7 *location) {
+    constexpr int plateau = 85; // Height of the plateau south of the pass, in units of 32.
+    for (int y = 14; y <= 23; y++) {
+        for (int x = 68; x <= 76; x++) {
+            // The floor is 7 cells wide, the outer columns form a slope up to the original walls.
+            int edge = std::abs(x - 72);
+            uint8_t &height = location->heightMap[y * 128 + x];
+            int floor = edge <= 3 ? plateau : plateau + (edge - 3) * 30;
+            if (height > floor)
+                height = floor;
+        }
+    }
+}
+
 MapDestination OutdoorLocation::getTravelDestination(int partyX, int partyY) {
     int direction;
     MapId currentMap = engine->_currentLoadedMapId;
@@ -296,6 +335,18 @@ MapDestination OutdoorLocation::getTravelDestination(int partyX, int partyY) {
         direction = 0; // north
     else
         return {};
+
+    if (currentMap == MAP_TATALIA && direction == 0 && isShireInstalled()) { // through the pass to the Shire
+        uDefaultTravelTime_ByFoot = 3;
+        return MapDestination(MAP_SHIRE, MAP_START_POINT_SOUTH);
+    }
+    if (currentMap == MAP_SHIRE) {
+        if (direction != 1)
+            return {};
+        // Back into the pass in Tatalia, facing south.
+        uDefaultTravelTime_ByFoot = 3;
+        return MapDestination(MAP_TATALIA, PartyPlacement(Vec3f(4352, 21248, 85 * 32), 1536, 0, 0));
+    }
 
     if (currentMap == MAP_AVLEE && direction == 3) {  // to Shoals
         bool wholePartyUnderwaterSuitEquipped = true;
@@ -453,6 +504,8 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
 
     OutdoorLocation_MM7 location;
     deserialize(lod::decodeMaybeCompressed(pGames_LOD->read(odm_filename)), &location); // read throws.
+    if (odm_filename == "out13.odm" && isShireInstalled())
+        carveTataliaPass(&location);
     reconstruct(location, this);
 
     // ****************.ddm file*********************//
@@ -462,7 +515,13 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
     bool respawnInitial = false; // Perform initial location respawn?
     bool respawnTimed = false; // Perform timed location respawn?
     OutdoorDelta_MM7 delta;
-    if (Blob blob = lod::decodeMaybeCompressed(pMapDeltas.at(ddm_filename))) {
+    // Saves made before the "Stín nad Krajem" expansion have no deltas for its maps, those start fresh.
+    auto storedDelta = pMapDeltas.find(ddm_filename);
+    if (storedDelta == pMapDeltas.end()) {
+        respawnInitial = true;
+    } else if (Blob blob = lod::decodeMaybeCompressed(storedDelta->second); ascii::noCaseEquals(odm_filename, "out16.odm") && !deltaFitsLocation(blob, location)) {
+        respawnInitial = true; // The Shire of an older expansion version.
+    } else if (blob) {
         try {
             deserialize(blob, &delta, tags::context(location));
 

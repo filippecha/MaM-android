@@ -19,10 +19,12 @@
 #include "Engine/Localization.h"
 #include "Engine/Party.h"
 #include "Engine/Data/AwardEnumFunctions.h"
+#include "Engine/Data/HouseEnumFunctions.h"
 #include "Engine/Spells/CastSpellInfo.h"
 #include "Engine/Timer.h"
 #include "Engine/Tables/ItemTable.h"
 #include "Engine/Tables/AwardTable.h"
+#include "Engine/Tables/MapTable.h"
 #include "Engine/Spells/Spells.h"
 #include "Engine/Data/AwardEnums.h"
 
@@ -849,6 +851,38 @@ void GUIWindow_CharacterRecord::CharacterUI_SkillsTab_Draw(Character *player) {
     y = drawSkillTable(player, 248, y, allMiscSkills(), 177, localization->str(LSTR_MISC));
 }
 
+/**
+ * @return                              Names of the locations of the taverns the party hasn't won an Arcomage game in
+ *                                      yet, comma-separated, empty if all are won.
+ */
+static std::string missingArcomageTaverns() {
+    static const IndexedArray<MapId, HOUSE_FIRST_ARCOMAGE_TAVERN, HOUSE_LAST_ARCOMAGE_TAVERN> tavernMaps = {
+        {HOUSE_TAVERN_HARMONDALE,       MAP_HARMONDALE},
+        {HOUSE_TAVERN_ERATHIA,          MAP_ERATHIA},
+        {HOUSE_TAVERN_TULAREAN_FOREST,  MAP_TULAREAN_FOREST},
+        {HOUSE_TAVERN_DEYJA,            MAP_DEYJA},
+        {HOUSE_TAVERN_BRACADA_DESERT,   MAP_BRACADA_DESERT},
+        {HOUSE_TAVERN_CELESTE,          MAP_CELESTE},
+        {HOUSE_TAVERN_PIT,              MAP_PIT},
+        {HOUSE_TAVERN_EVENMORN_ISLAND,  MAP_EVENMORN_ISLAND},
+        {HOUSE_TAVERN_MOUNT_NIGHON,     MAP_MOUNT_NIGHON},
+        {HOUSE_TAVERN_BARROW_DOWNS,     MAP_BARROW_DOWNS},
+        {HOUSE_TAVERN_TATALIA,          MAP_TATALIA},
+        {HOUSE_TAVERN_AVLEE,            MAP_AVLEE},
+        {HOUSE_TAVERN_STONE_CITY,       MAP_STONE_CITY}
+    };
+
+    std::string result;
+    for (HouseId tavern : allArcomageTaverns()) {
+        if (pParty->pArcomageWins[tavern])
+            continue;
+        if (!result.empty())
+            result += ", ";
+        result += pMapTable->pInfos[tavernMaps[tavern]].name;
+    }
+    return result;
+}
+
 std::string GUIWindow_CharacterRecord::getAchievedAwardsString(int idx) {
     std::string str;
 
@@ -868,6 +902,8 @@ std::string GUIWindow_CharacterRecord::getAchievedAwardsString(int idx) {
         break;
     case AWARD_ARCOMAGE_WINS:
         str = fmt::sprintf(pAwards[_achievedAwardsList[idx]].pText, pParty->uNumArcomageWins);
+        if (std::string missing = missingArcomageTaverns(); !missing.empty())
+            str += fmt::format(" (chyb\xed: {})", missing); // In-game strings are CP1250.
         break;
     case AWARD_ARCOMAGE_LOSES:
         str = fmt::sprintf(pAwards[_achievedAwardsList[idx]].pText, pParty->uNumArcomageLoses);

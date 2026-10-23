@@ -114,9 +114,10 @@ enum class MapId : uint32_t {
     MAP_STRANGE_TEMPLE = 74,
     MAP_SMALL_HOUSE = 75,
     MAP_ARENA = 76,
+    MAP_SHIRE = 77, // Kraj, MaM 7 expansion "Stín nad Krajem", out16.odm in data/kraj.lod.
 
     MAP_FIRST = MAP_EMERALD_ISLAND,
-    MAP_LAST = MAP_ARENA,
+    MAP_LAST = MAP_SHIRE,
 };
 using enum MapId;
 

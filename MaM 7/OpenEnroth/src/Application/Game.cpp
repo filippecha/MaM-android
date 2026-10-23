@@ -118,6 +118,14 @@ static void setMinimapZoom(int zoom) {
 
 Game::Game(PlatformApplication *application, std::shared_ptr<GameConfig> config) {
     _application = application;
+    // Ours: once per frame the gamepad cursor and the periodic autosave.
+    static PlatformApplication *app = nullptr;
+    app = application;
+    frameHook = [] {
+        if (GameWindowHandler *handler = app->component<GameWindowHandler>())
+            handler->gamepadTick();
+        periodicAutoSave();
+    };
     _config = config;
     _menu = std::make_unique<Menu>();
     _decalBuilder = EngineIocContainer::ResolveDecalBuilder();
@@ -1419,6 +1427,10 @@ void Game::processQueuedMessages() {
             case UIMSG_SelectCharacter:
                 engine->_messageQueue->clear();
                 GameUI_OnPlayerPortraitLeftClick(uMessageParam);
+                continue;
+            case UIMSG_CHEST_TakeAll:
+                if (current_screen_type == SCREEN_CHEST)
+                    Chest::GrabItem(true);
                 continue;
             case UIMSG_CHEST_ClickItem:
                 if (current_screen_type == SCREEN_CHEST_INVENTORY) {

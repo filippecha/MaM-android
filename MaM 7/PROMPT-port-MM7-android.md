@@ -226,6 +226,70 @@ G2) Sníh na začátku hry
   takže Smaragdový ostrov je pod sněhem. Změň výchozí hodnotu v src/Application/GameConfig.h
   na false. Datum startu (pondělí 1. 1. 1168, 9:00) je správně, neměň ho.
 
+G3) Gamepad
+- Engine má vazby pro gamepad (sekce [gamepad] v GameConfig.h: levá páčka chůze a úkroky,
+  pravá otáčení a pohled, A akce, L1 útok, R1 rychlé kouzlo, Y skok, Start boj po tazích,
+  L2/R2 let, L3 běh, R3 přistání, křížek vlevo mapa, vpravo úkoly, dolů kniha kouzel, B Escape),
+  ale na Androidu se k němu nic nedostane: SDL čte gamepad jen ze svého zobrazení (SDLSurface)
+  a nad ním leží dotykové ovládání. V aktivitě přepiš dispatchKeyEvent a dispatchGenericMotionEvent
+  a události se zdrojem JOYSTICK/GAMEPAD/DPAD od zařízení, které SDLControllerManager.isDeviceSDLJoystick
+  zná, předej SDLControllerManager.onNativePadDown/onNativePadUp, resp. handleJoystickMotionEvent.
+- Druhá chyba je v enginu samém a projeví se i na PC: KeyboardController (stav „co je právě
+  drženo", ze kterého KeyboardInputHandler každý snímek čte pohyb, útok, kouzlení a boj po tazích)
+  poslouchá jen klávesnici. Přidej mu gamepadKeyPressEvent/ReleaseEvent a gamepadAxisEvent
+  (páčka vychýlená přes polovinu = držená klávesa, pod polovinu se pustí oba směry).
+  Bez toho jdou gamepadem jen akce vyřizované hned při stisku (křížek, B).
+- Y je ve výchozím stavu skok i inventář zároveň. Nech Y jen skok, inventář dej na křížek nahoru
+  (poznámky, které tam byly, mají záložku v knize úkolů). Uložený openenroth.ini obsahuje všechny
+  vazby, proto staré rozložení při startu přepiš (GameStarter po načtení configu).
+- V nabídkách, oknech, dialozích a domech (všude mimo 3D pohled a hlavní menu) ať gamepad
+  řídí kurzor myši: páčky jím hýbou (GameWindowHandler, jednou za snímek přes hook volaný
+  z detail::globalProcessMessages), A je levé tlačítko, X pravé, B Escape, křížek krok kurzoru.
+  Emulátor gamepad nemá, ověřit to jde jen na telefonu.
+
+G4) Automatické ukládání po pěti minutách
+- Každých pět minut hraní (počítej jen čas na herní obrazovce, ne v nabídkách, při videích
+  a v aréně) ulož hru do auto01.mm7 až auto10.mm7 dokola, nejstarší přepiš, pořadí si pamatuj
+  v saves/auto.next. Název pozice „Automaticky NN", hláška ve stavovém řádku (cp1250!
+  řetězec „ulo" "ena" rozděl, clang v NDK jinak hlásí „hex escape sequence out of range").
+  Načtení pozice a nová hra odpočet začnou znovu. Původní ukládání při přechodu mapy nech.
+
+G5) Cheat: nesmrtelnost a neomezená mana
+- Deset stisků klávesy křiku (Y) za sebou, každý do dvou sekund od předchozího a bez jiné
+  klávesy mezi nimi, zapne příznak cheatImmortal (hláška ve stavovém řádku), dalších deset ho
+  vypne. Zapnutý: Character::receiveDamage nic neubere, Party::updateCharactersAndHirelingsEmotions
+  každý snímek doplní zdraví i manu a zruší všechny špatné stavy (allConditions() kromě
+  CONDITION_SLEEP, CONDITION_ZOMBIE a CONDITION_GOOD), Character::ItemsPotionDmgBreak nic
+  nerozbije. Jen v paměti, nuluj při loadGame,
+  saveNewGame a Party::Reset. Pozor: Y je zároveň klávesa „Ano", při nulování počítadla porovnávej
+  klávesy, ne akce. Držení klávesy (opakování) se nepočítá, počítej jen isKeyPressedThisFrame.
+
+G6) Sdílená identifikace předmětů a nestvůr
+- Dovednosti SKILL_ITEM_ID a SKILL_MONSTER_ID platí pro celou družinu, v dovednostech ale zůstávají
+  jen u postavy, která je má. Character::CanIdentify projde všechny živé postavy (ne mrtvé ani
+  vymazané) a vezme nejlepší součin GetMultiplierForSkillLevel(SKILL_ITEM_ID, 1, 2, 3, 5) × body,
+  velmistr kdekoli znamená vždy ano. V MonsterPopup_Draw (UIPopup.cpp) nech identifikaci nestvůry
+  zkusit každou živou postavu a příznaky normal/expert/master/grandmaster_level sjednoť (OR), protože
+  nižší mistrovství s více body může uspět tam, kde vyšší s málo body selže.
+
+G7) Tlačítko „Vzít vše" v truhle
+- Do okna truhly (UIChest.cpp) přidej nad „Zavřít" tlačítko {471, 400} o velikosti {169, 35}
+  s novou zprávou UIMSG_CHEST_TakeAll, kterou Game::processQueuedMessages obslouží voláním
+  Chest::GrabItem(true) (totéž co mezerník na PC). Textura „Zavřít" (ib-bcu-c) má nápis zapečený
+  v obrázku: zkopíruj ji (RgbaImage::copy), přes nápis (x 53–118, y 8–27) opakuj prázdný pruh
+  destičky zleva (14 sloupců) a nápis „Vzít vše" vykresli přímo do kopie písmem Arrus
+  (GUIFont::DrawTextLineToBuff, přesuň ji mezi veřejné metody) od řádku 10, vycentrovaný.
+  Tenký bitmapový nápis se na telefonu po zvětšení rozmazává do šeda: každý tah rozšiř o pixel
+  doprava, tah samotný ztmav na černou a sousední pixely jen na polovinu váhy jádra 1-2-1/2-4-2/1-2-1,
+  tím je po zvětšení stejně tmavý a hladký jako zapečené „Zavřít". Pozor na „\x9ae": escape \x9a
+  a e rozděl na dva literály.
+
+G8) Další úpravy, které už máme a jsou popsané v README.md projektu
+- Synchronizace uložených pozic do složky zvolené uživatelem (SaveSync.java), teleport mezi
+  hradem Harmondale a Smaragdovým ostrovem, družina na obřích schodech Titánské pevnosti
+  (nepropadá pod stupně), karta Úspěchy vypisuje hospody bez výhry v Arcomage, rozšíření
+  „Stín nad Krajem" (vlastní kraj.lod). Postupuj podle README a patchů nase-upravy-*.patch.
+
 H) Testování: povinné, než mi APK předáš
 - Rozeber hotové APK a ověř: podpis (apksigner verify), název a ID (aapt dump badging),
   native-code JEN arm64-v8a, všech 29 datových souborů uložených bez komprese, správné LOD uvnitř.

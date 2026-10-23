@@ -344,7 +344,7 @@ class GameConfig : public Config {
 
         Key AlwaysRun = {this, INPUT_ACTION_TOGGLE_ALWAYS_RUN, "always_run", PlatformKey::KEY_GAMEPAD_L3, "Always run toggle key."};
         Key Attack = {this, INPUT_ACTION_ATTACK, "attack", PlatformKey::KEY_GAMEPAD_L1, "Attack key."};
-        Key AutoNotes = {this, INPUT_ACTION_OPEN_AUTONOTES, "auto_notes", PlatformKey::KEY_GAMEPAD_UP, "Open autonotes key."};
+        Key AutoNotes = {this, INPUT_ACTION_OPEN_AUTONOTES, "auto_notes", PlatformKey::KEY_NONE, "Open autonotes key."};
         Key Backward = {this, INPUT_ACTION_MOVE_BACKWARDS, "backward", PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN, "Walk backwards key."};
         Key Cast = {this, INPUT_ACTION_OPEN_SPELLBOOK, "cast", PlatformKey::KEY_GAMEPAD_DOWN, "Cast a spell from spellbook key."};
         Key CastReady = {this, INPUT_ACTION_QUICK_CAST, "cast_ready", PlatformKey::KEY_GAMEPAD_R1, "Cast a quick spell key."};
@@ -377,7 +377,7 @@ class GameConfig : public Config {
         Key History = {this, INPUT_ACTION_OPEN_HISTORY, "history", PlatformKey::KEY_NONE, "History book key."};
         Key Stats = {this, INPUT_ACTION_OPEN_STATS, "stats", PlatformKey::KEY_GAMEPAD_A, "Stats tab key."};
         Key Skills = {this, INPUT_ACTION_OPEN_SKILLS, "skills", PlatformKey::KEY_GAMEPAD_X, "Skills tab key."};
-        Key Inventory = {this, INPUT_ACTION_OPEN_INVENTORY, "inventory", PlatformKey::KEY_GAMEPAD_Y, "Inventory tab key."};
+        Key Inventory = {this, INPUT_ACTION_OPEN_INVENTORY, "inventory", PlatformKey::KEY_GAMEPAD_UP, "Inventory tab key."};
         Key Awards = {this, INPUT_ACTION_OPEN_AWARDS, "awards", PlatformKey::KEY_GAMEPAD_L1, "Stats tab key."};
         Key NewGame = {this, INPUT_ACTION_NEW_GAME, "new_game", PlatformKey::KEY_GAMEPAD_A, "New Game menu key."};
         Key SaveGame = {this, INPUT_ACTION_SAVE_GAME, "save_game", PlatformKey::KEY_GAMEPAD_Y, "Save Game menu key."};

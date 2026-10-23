@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -87,6 +88,9 @@ class KeyboardInputHandler {
     std::string pPressedKeysBuffer;
     TextInputType inputType = TextInputType::None;
     GUIWindow *window = nullptr;
+    // Ours: the row of yells of the immortality cheat (Party.h cheatImmortal).
+    int _yellCount = 0;
+    std::chrono::steady_clock::time_point _lastYell;
 };
 }  // namespace Io
 

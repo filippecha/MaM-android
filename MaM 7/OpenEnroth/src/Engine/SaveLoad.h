@@ -50,6 +50,13 @@ void loadGame(std::string_view fileName);
 std::pair<SaveGameHeader, Blob> createSaveData(bool resetWorld, std::string_view title);
 SaveGameHeader saveGame(bool isAutoSave, bool resetWorld, std::string_view path, std::string_view title = {});
 void autoSave();
+/**
+ * Ours: every five minutes of play (on the game screen) the game is saved into "auto01.mm7".."auto10.mm7" in turn,
+ * the oldest one being overwritten. Called every frame.
+ */
+void periodicAutoSave();
+/** Restarts the five minutes (a game was loaded or started). */
+void periodicAutoSaveReset();
 
 /**
  * Saves the game.

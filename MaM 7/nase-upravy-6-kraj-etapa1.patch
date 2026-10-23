@@ -1,0 +1,369 @@
+diff --git a/src/Engine/Engine.cpp b/src/Engine/Engine.cpp
+index ec55bc65..9f1c09fd 100644
+--- a/src/Engine/Engine.cpp
++++ b/src/Engine/Engine.cpp
+@@ -644,6 +644,12 @@ void MM7_LoadLods() {
+     pSprites_LOD = new LodSpriteCache;
+     pSprites_LOD->open(dfs->read("data/sprites.lod"));
+ 
++    if (dfs->exists("data/kraj.lod")) {
++        // Icons and textures of the "Stín nad Krajem" expansion, both from the same LOD.
++        pIcons_LOD->openKraj(dfs->read("data/kraj.lod"));
++        pBitmaps_LOD->openKraj(dfs->read("data/kraj.lod"));
++    }
++
+     // TODO(captainurist):
+     // on error in `open` we had this:
+     // Error(localization->str(LSTR_MIGHT_AND_MAGIC_VII_IS_HAVING_TROUBLE), localization->str(LSTR_REINSTALL_NECESSARY));
+@@ -727,6 +733,8 @@ void Engine::SecondaryInitialization() {
+ 
+     pMapTable = new MapTable();
+     pMapTable->Initialize(engine->resources()->eventsData("MapStats.txt"));
++    if (Blob krajMaps = engine->resources()->krajData("kmapstats.txt"))
++        pMapTable->Initialize(krajMaps); // Rows of the "Stín nad Krajem" expansion maps.
+ 
+     pMonsterStats = new MonsterStats();
+     pMonsterStats->Initialize(engine->resources()->eventsData("monsters.txt"));
+diff --git a/src/Engine/Graphics/Indoor.cpp b/src/Engine/Graphics/Indoor.cpp
+index 4671044a..3957c15f 100644
+--- a/src/Engine/Graphics/Indoor.cpp
++++ b/src/Engine/Graphics/Indoor.cpp
+@@ -137,7 +137,8 @@ static constexpr IndexedArray<SoundId, MAP_FIRST, MAP_LAST> pDoorSoundIDsByLocat
+     {MAP_HIDDEN_TOMB,               SOUND_stone_door0301},
+     {MAP_STRANGE_TEMPLE,            SOUND_wood_door0301},
+     {MAP_SMALL_HOUSE,               SOUND_stone_door0101},
+-    {MAP_ARENA,                     SOUND_wood_door0101}
++    {MAP_ARENA,                     SOUND_wood_door0101},
++    {MAP_SHIRE,                     SOUND_wood_door0101}
+ };
+ 
+ //----- (0043F39E) --------------------------------------------------------
+@@ -281,7 +282,11 @@ void IndoorLocation::Load(std::string_view filename, int num_days_played, int re
+     bool respawnInitial = false; // Perform initial location respawn?
+     bool respawnTimed = false; // Perform timed location respawn?
+     IndoorDelta_MM7 delta;
+-    if (Blob blob = lod::decodeMaybeCompressed(pMapDeltas.at(dlv_filename))) {
++    // Saves made before the "Stín nad Krajem" expansion have no deltas for its maps, those start fresh.
++    auto storedDelta = pMapDeltas.find(dlv_filename);
++    if (storedDelta == pMapDeltas.end()) {
++        respawnInitial = true;
++    } else if (Blob blob = lod::decodeMaybeCompressed(storedDelta->second)) {
+         try {
+             deserialize(blob, &delta, tags::context(location));
+ 
+diff --git a/src/Engine/Graphics/Outdoor.cpp b/src/Engine/Graphics/Outdoor.cpp
+index 24f70311..aad90c01 100644
+--- a/src/Engine/Graphics/Outdoor.cpp
++++ b/src/Engine/Graphics/Outdoor.cpp
+@@ -277,6 +277,28 @@ bool OutdoorLocation::Initialize(std::string_view filename, int days_played,
+     return false;
+ }
+ 
++bool isShireInstalled() {
++    return !pMapTable->pInfos[MAP_SHIRE].fileName.empty();
++}
++
++/**
++ * The mountains along the north edge of Tatalia close it off. With the "Stín nad Krajem" expansion a pass leads from
++ * the snowy plateau north to the edge of the map, where the party can travel on to the Shire.
++ */
++static void carveTataliaPass(OutdoorLocation_MM7 *location) {
++    constexpr int plateau = 85; // Height of the plateau south of the pass, in units of 32.
++    for (int y = 14; y <= 23; y++) {
++        for (int x = 68; x <= 76; x++) {
++            // The floor is 7 cells wide, the outer columns form a slope up to the original walls.
++            int edge = std::abs(x - 72);
++            uint8_t &height = location->heightMap[y * 128 + x];
++            int floor = edge <= 3 ? plateau : plateau + (edge - 3) * 30;
++            if (height > floor)
++                height = floor;
++        }
++    }
++}
++
+ MapDestination OutdoorLocation::getTravelDestination(int partyX, int partyY) {
+     int direction;
+     MapId currentMap = engine->_currentLoadedMapId;
+@@ -297,6 +319,18 @@ MapDestination OutdoorLocation::getTravelDestination(int partyX, int partyY) {
+     else
+         return {};
+ 
++    if (currentMap == MAP_TATALIA && direction == 0 && isShireInstalled()) { // through the pass to the Shire
++        uDefaultTravelTime_ByFoot = 3;
++        return MapDestination(MAP_SHIRE, MAP_START_POINT_SOUTH);
++    }
++    if (currentMap == MAP_SHIRE) {
++        if (direction != 1)
++            return {};
++        // Back into the pass in Tatalia, facing south.
++        uDefaultTravelTime_ByFoot = 3;
++        return MapDestination(MAP_TATALIA, PartyPlacement(Vec3f(4352, 21248, 85 * 32), 1536, 0, 0));
++    }
++
+     if (currentMap == MAP_AVLEE && direction == 3) {  // to Shoals
+         bool wholePartyUnderwaterSuitEquipped = true;
+         for (Character &player : pParty->pCharacters) {
+@@ -453,6 +487,8 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
+ 
+     OutdoorLocation_MM7 location;
+     deserialize(lod::decodeMaybeCompressed(pGames_LOD->read(odm_filename)), &location); // read throws.
++    if (odm_filename == "out13.odm" && isShireInstalled())
++        carveTataliaPass(&location);
+     reconstruct(location, this);
+ 
+     // ****************.ddm file*********************//
+@@ -462,7 +498,11 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
+     bool respawnInitial = false; // Perform initial location respawn?
+     bool respawnTimed = false; // Perform timed location respawn?
+     OutdoorDelta_MM7 delta;
+-    if (Blob blob = lod::decodeMaybeCompressed(pMapDeltas.at(ddm_filename))) {
++    // Saves made before the "Stín nad Krajem" expansion have no deltas for its maps, those start fresh.
++    auto storedDelta = pMapDeltas.find(ddm_filename);
++    if (storedDelta == pMapDeltas.end()) {
++        respawnInitial = true;
++    } else if (Blob blob = lod::decodeMaybeCompressed(storedDelta->second)) {
+         try {
+             deserialize(blob, &delta, tags::context(location));
+ 
+diff --git a/src/Engine/MapEnumFunctions.h b/src/Engine/MapEnumFunctions.h
+index 9118b72f..c6f5cfe0 100644
+--- a/src/Engine/MapEnumFunctions.h
++++ b/src/Engine/MapEnumFunctions.h
+@@ -6,7 +6,7 @@
+  * Is map an outdoor map?
+  */
+ inline bool isMapOutdoor(MapId mapid) {
+-    return mapid >= MAP_EMERALD_ISLAND && mapid <= MAP_SHOALS && mapid != MAP_PIT && mapid != MAP_CELESTE;
++    return (mapid >= MAP_EMERALD_ISLAND && mapid <= MAP_SHOALS && mapid != MAP_PIT && mapid != MAP_CELESTE) || mapid == MAP_SHIRE;
+ }
+ 
+ /**
+diff --git a/src/Engine/MapEnums.h b/src/Engine/MapEnums.h
+index 8943aaa7..69d98211 100644
+--- a/src/Engine/MapEnums.h
++++ b/src/Engine/MapEnums.h
+@@ -114,9 +114,10 @@ enum class MapId : uint32_t {
+     MAP_STRANGE_TEMPLE = 74,
+     MAP_SMALL_HOUSE = 75,
+     MAP_ARENA = 76,
++    MAP_SHIRE = 77, // Kraj, MaM 7 expansion "Stín nad Krajem", out16.odm in data/kraj.lod.
+ 
+     MAP_FIRST = MAP_EMERALD_ISLAND,
+-    MAP_LAST = MAP_ARENA,
++    MAP_LAST = MAP_SHIRE,
+ };
+ using enum MapId;
+ 
+diff --git a/src/Engine/Resources/LOD.cpp b/src/Engine/Resources/LOD.cpp
+index 71899b94..5e051be1 100644
+--- a/src/Engine/Resources/LOD.cpp
++++ b/src/Engine/Resources/LOD.cpp
+@@ -1,12 +1,37 @@
+ #include "LOD.h"
+ 
++#include <algorithm>
+ #include <memory>
++#include <string>
++#include <vector>
+ 
+ #include "EngineFileSystem.h"
+ 
+-std::unique_ptr<LodReader> pGames_LOD;
++std::unique_ptr<GamesLod> pGames_LOD;
++
++bool GamesLod::exists(std::string_view filename) const {
++    return (kraj && kraj->exists(filename)) || base.exists(filename);
++}
++
++Blob GamesLod::read(std::string_view filename) const {
++    if (kraj && kraj->exists(filename))
++        return kraj->read(filename);
++    return base.read(filename);
++}
++
++std::vector<std::string> GamesLod::ls() const {
++    std::vector<std::string> result = base.ls();
++    if (kraj)
++        for (const std::string &name : kraj->ls())
++            if (std::ranges::find(result, name) == result.end())
++                result.push_back(name);
++    return result;
++}
+ 
+ bool Initialize_GamesLOD_NewLOD() {
+-    pGames_LOD = std::make_unique<LodReader>(dfs->read("data/games.lod"));
++    pGames_LOD = std::make_unique<GamesLod>();
++    pGames_LOD->base.open(dfs->read("data/games.lod"));
++    if (dfs->exists("data/kraj.lod"))
++        pGames_LOD->kraj = std::make_unique<LodReader>(dfs->read("data/kraj.lod"));
+     return true;
+ }
+diff --git a/src/Engine/Resources/LOD.h b/src/Engine/Resources/LOD.h
+index d4ecda5e..f89fb15b 100644
+--- a/src/Engine/Resources/LOD.h
++++ b/src/Engine/Resources/LOD.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
+ #include <memory>
++#include <string>
++#include <string_view>
++#include <vector>
+ 
+ #include "Library/Lod/LodReader.h"
+ 
+@@ -8,5 +11,18 @@ class FileSystem;
+ 
+ bool Initialize_GamesLOD_NewLOD();
+ 
+-/** LOD reader for data/games.lod. */
+-extern std::unique_ptr<LodReader> pGames_LOD;
++/**
++ * Maps from data/games.lod, with the maps of the MaM 7 expansion "Stín nad Krajem" from data/kraj.lod (if present)
++ * taking precedence.
++ */
++class GamesLod {
++ public:
++    [[nodiscard]] bool exists(std::string_view filename) const;
++    [[nodiscard]] Blob read(std::string_view filename) const;
++    [[nodiscard]] std::vector<std::string> ls() const;
++
++    LodReader base;
++    std::unique_ptr<LodReader> kraj;
++};
++
++extern std::unique_ptr<GamesLod> pGames_LOD;
+diff --git a/src/Engine/Resources/LodTextureCache.cpp b/src/Engine/Resources/LodTextureCache.cpp
+index 95c420ea..5c8908e3 100644
+--- a/src/Engine/Resources/LodTextureCache.cpp
++++ b/src/Engine/Resources/LodTextureCache.cpp
+@@ -23,6 +23,15 @@ void LodTextureCache::open(Blob blob) {
+     _reader.open(std::move(blob));
+ }
+ 
++void LodTextureCache::openKraj(Blob blob) {
++    _krajReader.open(std::move(blob));
++    _hasKraj = true;
++}
++
++const LodReader &LodTextureCache::readerFor(std::string_view pContainer) const {
++    return _hasKraj && _krajReader.exists(pContainer) ? _krajReader : _reader;
++}
++
+ void LodTextureCache::reserveLoadedTextures() {
+     _reservedCount = _texturesInOrder.size();
+ }
+@@ -57,17 +66,18 @@ LodImage *LodTextureCache::loadTexture(std::string_view pContainer, bool useDumm
+ }
+ 
+ Blob LodTextureCache::LoadCompressedTexture(std::string_view pContainer) {
+-    return lod::decodeMaybeCompressed(_reader.read(pContainer));
++    return lod::decodeMaybeCompressed(readerFor(pContainer).read(pContainer));
+ }
+ 
+ Blob LodTextureCache::read(std::string_view pContainer) {
+-    return _reader.read(pContainer);
++    return readerFor(pContainer).read(pContainer);
+ }
+ 
+ bool LodTextureCache::LoadTextureFromLOD(LodImage *pOutTex, std::string_view pContainer) {
+-    if (!_reader.exists(pContainer))
++    const LodReader &reader = readerFor(pContainer);
++    if (!reader.exists(pContainer))
+         return false;
+ 
+-    *pOutTex = lod::decodeImage(_reader.read(pContainer));
++    *pOutTex = lod::decodeImage(reader.read(pContainer));
+     return true;
+ }
+diff --git a/src/Engine/Resources/LodTextureCache.h b/src/Engine/Resources/LodTextureCache.h
+index ef31e5d9..226b8f3d 100644
+--- a/src/Engine/Resources/LodTextureCache.h
++++ b/src/Engine/Resources/LodTextureCache.h
+@@ -19,6 +19,11 @@ class LodTextureCache {
+ 
+     void open(Blob blob);
+ 
++    /**
++     * Lays the images of the MaM 7 expansion "Stín nad Krajem" (data/kraj.lod) over this LOD, they are looked up first.
++     */
++    void openKraj(Blob blob);
++
+     void reserveLoadedTextures();
+     void releaseUnreserved();
+ 
+@@ -31,7 +36,11 @@ class LodTextureCache {
+     bool LoadTextureFromLOD(LodImage *pOutTex, std::string_view pContainer);
+ 
+  private:
++    const LodReader &readerFor(std::string_view pContainer) const;
++
+     LodReader _reader;
++    LodReader _krajReader;
++    bool _hasKraj = false;
+     int _reservedCount = 0;
+     std::unordered_map<std::string, LodImage> _textureByName;
+     std::vector<std::string> _texturesInOrder;
+diff --git a/src/Engine/Resources/ResourceManager.cpp b/src/Engine/Resources/ResourceManager.cpp
+index 8379cfe9..e5732a84 100644
+--- a/src/Engine/Resources/ResourceManager.cpp
++++ b/src/Engine/Resources/ResourceManager.cpp
+@@ -12,14 +12,24 @@ ResourceManager::~ResourceManager() = default;
+ 
+ void ResourceManager::open() {
+     _eventsLodReader.open(dfs->read("data/events.lod"));
++    _hasKraj = dfs->exists("data/kraj.lod");
++    if (_hasKraj)
++        _krajLodReader.open(dfs->read("data/kraj.lod"));
+     // TODO(captainurist):
+     //  on exception:
+     //      Error(localization->str(LSTR_MIGHT_AND_MAGIC_VII_IS_HAVING_TROUBLE), localization->str(LSTR_REINSTALL_NECESSARY));
+     // but we can't use localization object here cause it's not yet initialized.
+ }
+ 
++Blob ResourceManager::krajData(std::string_view filename) {
++    if (!_hasKraj || !_krajLodReader.exists(filename))
++        return Blob();
++    return lod::decodeMaybeCompressed(_krajLodReader.read(filename));
++}
++
+ Blob ResourceManager::eventsData(std::string_view filename) {
+-    Blob result = lod::decodeMaybeCompressed(_eventsLodReader.read(filename));
++    const LodReader &reader = _hasKraj && _krajLodReader.exists(filename) ? _krajLodReader : _eventsLodReader;
++    Blob result = lod::decodeMaybeCompressed(reader.read(filename));
+ 
+     bool isText = filename.size() >= 4 && ascii::noCaseEquals(filename.substr(filename.size() - 4), ".txt");
+     if (isText && result.size() > 0 && result.str().back() == '\x1a')
+diff --git a/src/Engine/Resources/ResourceManager.h b/src/Engine/Resources/ResourceManager.h
+index 25ccbe3d..e7aaa161 100644
+--- a/src/Engine/Resources/ResourceManager.h
++++ b/src/Engine/Resources/ResourceManager.h
+@@ -18,6 +18,14 @@ class ResourceManager {
+ 
+     Blob eventsData(std::string_view filename);
+ 
++    /**
++     * @return                          Table or script of the "Stín nad Krajem" expansion from data/kraj.lod, or an
++     *                                  empty blob if the expansion or the file isn't there.
++     */
++    Blob krajData(std::string_view filename);
++
+  private:
+     LodReader _eventsLodReader;
++    LodReader _krajLodReader;
++    bool _hasKraj = false;
+ };
+diff --git a/src/Engine/Tables/NPCTable.cpp b/src/Engine/Tables/NPCTable.cpp
+index 5c2c8c33..cd29b633 100644
+--- a/src/Engine/Tables/NPCTable.cpp
++++ b/src/Engine/Tables/NPCTable.cpp
+@@ -255,6 +255,9 @@ void NPCStats::InitializeAdditionalNPCs(NPCData *pNPCDataBuff, MonsterId npc_uid
+         pNPCDataBuff->rep = 0;
+     }
+ 
++    // Maps without a profession table row (the "Stín nad Krajem" expansion) use the one of Harmondale.
++    if (!pProfessionChance[uMapId].total)
++        uMapId = MAP_HARMONDALE;
+     max_prof_cap = grng->random(pProfessionChance[uMapId].total);
+     test_prof_summ = 0;
+     pNPCDataBuff->profession = NPC_PROFESSION_LAST;

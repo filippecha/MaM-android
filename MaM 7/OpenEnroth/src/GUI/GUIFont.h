@@ -100,10 +100,10 @@ class GUIFont {
                           Color secondColor, Color shadowColor, std::string_view pString,
                           RgbaImage *image);
     int GetStringHeightWithSecondFont(GUIFont *secondFont, std::string_view text_str, int width, int x);
+    void DrawTextLineToBuff(Color startColor, Color shadowColor, Color *uX_buff_pos, std::string_view text, int line_width);
 
  private:
     std::string FitTwoFontStringInWindow(std::string_view inString, GUIFont *pFontSecond, int width, int x);
-    void DrawTextLineToBuff(Color startColor, Color shadowColor, Color *uX_buff_pos, std::string_view text, int line_width);
 
  private:
     LodFont _font;

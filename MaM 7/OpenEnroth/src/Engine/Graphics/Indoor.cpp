@@ -137,7 +137,8 @@ static constexpr IndexedArray<SoundId, MAP_FIRST, MAP_LAST> pDoorSoundIDsByLocat
     {MAP_HIDDEN_TOMB,               SOUND_stone_door0301},
     {MAP_STRANGE_TEMPLE,            SOUND_wood_door0301},
     {MAP_SMALL_HOUSE,               SOUND_stone_door0101},
-    {MAP_ARENA,                     SOUND_wood_door0101}
+    {MAP_ARENA,                     SOUND_wood_door0101},
+    {MAP_SHIRE,                     SOUND_wood_door0101}
 };
 
 //----- (0043F39E) --------------------------------------------------------
@@ -281,7 +282,11 @@ void IndoorLocation::Load(std::string_view filename, int num_days_played, int re
     bool respawnInitial = false; // Perform initial location respawn?
     bool respawnTimed = false; // Perform timed location respawn?
     IndoorDelta_MM7 delta;
-    if (Blob blob = lod::decodeMaybeCompressed(pMapDeltas.at(dlv_filename))) {
+    // Saves made before the "Stín nad Krajem" expansion have no deltas for its maps, those start fresh.
+    auto storedDelta = pMapDeltas.find(dlv_filename);
+    if (storedDelta == pMapDeltas.end()) {
+        respawnInitial = true;
+    } else if (Blob blob = lod::decodeMaybeCompressed(storedDelta->second)) {
         try {
             deserialize(blob, &delta, tags::context(location));
 
@@ -1457,6 +1462,10 @@ void BLV_ProcessPartyActions() {  // could this be combined with odm process act
             return;
         }
     }
+
+    // Risers can be ethereal, e.g. in the Titans' Stronghold, and the party walks through them and under the next step.
+    if (pParty->pos.z < floorZ && floorZ - pParty->pos.z < 128 && pIndoor->faces[faceId].polygonType != POLYGON_Ceiling)
+        pParty->pos.z = floorZ;
 
     int fall_start;
     if (pParty->FeatherFallActive() || pParty->wearsItem(ITEM_ARTIFACT_LADYS_ESCORT)

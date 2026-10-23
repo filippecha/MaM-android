@@ -213,6 +213,7 @@ enum UIMessageType : uint32_t {
     UIMSG_MMT_MainMenu_Continue = 429,
 
     UIMSG_SaveLoadScroll = 970,
+    UIMSG_CHEST_TakeAll = 971,  // Ours.
 
     // OE-specific UIMSG values.
     UIMSG_QuickSave = 2000,

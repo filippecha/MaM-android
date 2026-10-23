@@ -1,6 +1,7 @@
 #include "SaveLoad.h"
 
 #include <cassert>
+#include <chrono>
 #include <unordered_map>
 #include <string>
 #include <string_view>
@@ -32,6 +33,7 @@
 #include "GUI/UI/UIStatusBar.h"
 
 #include "Media/Audio/AudioPlayer.h"
+#include "Media/MediaPlayer.h"
 
 #include "Library/Snapshots/SnapshotSerialization.h"
 #include "Library/Image/Pcx.h"
@@ -48,6 +50,8 @@ void loadGame(std::string_view fileName) {
         return;
     }
     engine->_lastLoadedSaveFileName = fileName;
+    cheatImmortal = false;  // Ours: a loaded game starts honest.
+    periodicAutoSaveReset();
 
     // TODO(captainurist): remained from Party::Reset, doesn't really belong here (or in Party::Reset).
     current_character_screen_window = WINDOW_CharacterWindow_Stats;
@@ -67,6 +71,12 @@ void loadGame(std::string_view fileName) {
     *gameTimer = std::move(state.eventTimer);
     *pActiveOverlayList = std::move(state.overlays);
     pNPCStats->pNPCData = std::move(state.npcData);
+
+    // Saves made before the "Stín nad Krajem" expansion have its inhabitants as blank unused rows. Portraits never
+    // change during the game, so a row without a portrait that has one in the table is taken from the table.
+    for (size_t i = 0; i < pNPCStats->pNPCData.size(); i++)
+        if (!pNPCStats->pNPCData[i].portraitId && pNPCStats->pOriginalNPCData[i].portraitId)
+            pNPCStats->pNPCData[i] = pNPCStats->pOriginalNPCData[i];
     pNPCStats->pGroups = std::move(state.npcGroups);
     pMapDeltas = std::move(state.mapDeltas);
 
@@ -211,6 +221,38 @@ SaveGameHeader saveGame(bool isAutoSave, bool resetWorld, std::string_view path,
     return header;
 }
 
+static std::chrono::steady_clock::time_point periodicAutoSaveLast = std::chrono::steady_clock::now();
+
+void periodicAutoSaveReset() {
+    periodicAutoSaveLast = std::chrono::steady_clock::now();
+}
+
+void periodicAutoSave() {
+    if (current_screen_type != SCREEN_GAME || GetCurrentMenuID() != MENU_NONE || !engine || !pParty ||
+        engine->_currentLoadedMapId == MAP_INVALID || engine->_currentLoadedMapId == MAP_ARENA || pMediaPlayer->IsMoviePlaying())
+        return;  // Only while playing; the clock runs on.
+    if (std::chrono::steady_clock::now() - periodicAutoSaveLast < std::chrono::minutes(5))
+        return;
+    periodicAutoSaveLast = std::chrono::steady_clock::now();
+    // The next of the ten slots: remembered in saves/auto.next.
+    int next = 0;
+    if (ufs->exists("saves/auto.next")) {
+        try {
+            next = std::clamp(std::stoi(std::string(ufs->read("saves/auto.next").str())), 0, 9);
+        } catch (...) {
+            next = 0;
+        }
+    }
+    std::string fileName = fmt::format("auto{:02}.mm7", next + 1);
+    try {
+        saveGame(true, false, fmt::format("saves/{}", fileName), fmt::format("Automaticky {:02}", next + 1));
+        ufs->write("saves/auto.next", Blob::fromString(std::to_string((next + 1) % 10)));
+        engine->_statusBar->setEvent(fmt::format("Hra automaticky ulo\x9e" "ena ({:02})", next + 1));
+    } catch (const std::exception &e) {
+        MM_WARNING("periodicAutoSave: {}", e.what());
+    }
+}
+
 void autoSave() {
     saveGame(true, false, fmt::format("saves/{}", autosaveFileName), localization->str(LSTR_AUTOSAVE));
 }
@@ -237,6 +279,8 @@ void doSavegame(std::string fileName, std::string_view title) {
 }
 
 void saveNewGame() {
+    cheatImmortal = false;  // Ours.
+    periodicAutoSaveReset();
     engine->_currentLoadedMapId = MAP_EMERALD_ISLAND;
     engine->_lastLoadedSaveFileName.clear(); // Otherwise the save menu would pre-select a save from a previous playthrough.
     pParty->pos.x = 12552;

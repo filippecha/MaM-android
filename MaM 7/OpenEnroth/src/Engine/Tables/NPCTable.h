@@ -125,7 +125,7 @@ struct NPCStats {
     IndexedArray<NPCProfessionChance, MAP_FIRST, MAP_LAST> pProfessionChance;
     int field_17884 = 0;
     int field_17888 = 0;
-    std::array<NPCGreeting, 206> pNPCGreetings;
+    std::array<NPCGreeting, 300> pNPCGreetings; // 206 originally, the rest is for the "Stín nad Krajem" expansion.
     std::array<uint16_t, 51> pOriginalGroups = {{}}; // NPC groups as read from npcgroup.txt.
     std::array<uint16_t, 51> pGroups = {{}}; // NPC groups used during the game.
     int uNewlNPCBufPos = 0;
@@ -137,5 +137,5 @@ struct NPCStats {
     static int dword_AE3370_LastMispronouncedNameResult;
 };
 
-extern std::array<NPCTopic, 789> pNPCTopics;
+extern std::array<NPCTopic, 1500> pNPCTopics; // 789 originally, the rest is for the "Stín nad Krajem" expansion.
 extern NPCStats *pNPCStats;

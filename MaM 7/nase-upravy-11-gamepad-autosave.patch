@@ -1,0 +1,499 @@
+diff --git a/MaM 7/OpenEnroth/src/Application/GameConfig.h b/MaM 7/OpenEnroth/src/Application/GameConfig.h
+index 1abfb0f4..9beb8444 100644
+--- a/MaM 7/OpenEnroth/src/Application/GameConfig.h	
++++ b/MaM 7/OpenEnroth/src/Application/GameConfig.h	
+@@ -344,7 +344,7 @@ class GameConfig : public Config {
+ 
+         Key AlwaysRun = {this, INPUT_ACTION_TOGGLE_ALWAYS_RUN, "always_run", PlatformKey::KEY_GAMEPAD_L3, "Always run toggle key."};
+         Key Attack = {this, INPUT_ACTION_ATTACK, "attack", PlatformKey::KEY_GAMEPAD_L1, "Attack key."};
+-        Key AutoNotes = {this, INPUT_ACTION_OPEN_AUTONOTES, "auto_notes", PlatformKey::KEY_GAMEPAD_UP, "Open autonotes key."};
++        Key AutoNotes = {this, INPUT_ACTION_OPEN_AUTONOTES, "auto_notes", PlatformKey::KEY_NONE, "Open autonotes key."};
+         Key Backward = {this, INPUT_ACTION_MOVE_BACKWARDS, "backward", PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN, "Walk backwards key."};
+         Key Cast = {this, INPUT_ACTION_OPEN_SPELLBOOK, "cast", PlatformKey::KEY_GAMEPAD_DOWN, "Cast a spell from spellbook key."};
+         Key CastReady = {this, INPUT_ACTION_QUICK_CAST, "cast_ready", PlatformKey::KEY_GAMEPAD_R1, "Cast a quick spell key."};
+@@ -377,7 +377,7 @@ class GameConfig : public Config {
+         Key History = {this, INPUT_ACTION_OPEN_HISTORY, "history", PlatformKey::KEY_NONE, "History book key."};
+         Key Stats = {this, INPUT_ACTION_OPEN_STATS, "stats", PlatformKey::KEY_GAMEPAD_A, "Stats tab key."};
+         Key Skills = {this, INPUT_ACTION_OPEN_SKILLS, "skills", PlatformKey::KEY_GAMEPAD_X, "Skills tab key."};
+-        Key Inventory = {this, INPUT_ACTION_OPEN_INVENTORY, "inventory", PlatformKey::KEY_GAMEPAD_Y, "Inventory tab key."};
++        Key Inventory = {this, INPUT_ACTION_OPEN_INVENTORY, "inventory", PlatformKey::KEY_GAMEPAD_UP, "Inventory tab key."};
+         Key Awards = {this, INPUT_ACTION_OPEN_AWARDS, "awards", PlatformKey::KEY_GAMEPAD_L1, "Stats tab key."};
+         Key NewGame = {this, INPUT_ACTION_NEW_GAME, "new_game", PlatformKey::KEY_GAMEPAD_A, "New Game menu key."};
+         Key SaveGame = {this, INPUT_ACTION_SAVE_GAME, "save_game", PlatformKey::KEY_GAMEPAD_Y, "Save Game menu key."};
+diff --git a/MaM 7/OpenEnroth/src/Application/Startup/GameStarter.cpp b/MaM 7/OpenEnroth/src/Application/Startup/GameStarter.cpp
+index e7e41cac..de838eef 100644
+--- a/MaM 7/OpenEnroth/src/Application/Startup/GameStarter.cpp	
++++ b/MaM 7/OpenEnroth/src/Application/Startup/GameStarter.cpp	
+@@ -89,6 +89,13 @@ void GameStarter::initialize() {
+ #endif
+         MM_INFO("Could not read configuration file '{}'! Loaded default configuration instead!", ufs->displayPath(configName));
+     }
++    // The saved config holds every binding, so the old gamepad layout survives an update: Y opened the inventory
++    // and jumped at once. The inventory goes to the d-pad's top, where the autonotes were (the quest book has a tab for them).
++    if (_config->gamepad.Inventory.value() == PlatformKey::KEY_GAMEPAD_Y && _config->gamepad.Jump.value() == PlatformKey::KEY_GAMEPAD_Y) {
++        _config->gamepad.Inventory.setValue(PlatformKey::KEY_GAMEPAD_UP);
++        if (_config->gamepad.AutoNotes.value() == PlatformKey::KEY_GAMEPAD_UP)
++            _config->gamepad.AutoNotes.setValue(PlatformKey::KEY_NONE);
++    }
+     MM_INFO("Built in resource override is {}.", _config->debug.OverrideBuiltInResources.value() ? "enabled" : "disabled");
+ 
+     // Patch config.
+diff --git a/MaM 7/nase-upravy-11-gamepad-autosave.patch b/MaM 7/nase-upravy-11-gamepad-autosave.patch
+index a4980880..e69de29b 100644
+--- a/MaM 7/nase-upravy-11-gamepad-autosave.patch	
++++ b/MaM 7/nase-upravy-11-gamepad-autosave.patch	
+@@ -1,454 +0,0 @@
+-diff --git a/MaM 7/OpenEnroth/src/Io/KeyboardController.cpp b/MaM 7/OpenEnroth/src/Io/KeyboardController.cpp
+-index 1eab0498..1fe41e48 100644
+---- a/MaM 7/OpenEnroth/src/Io/KeyboardController.cpp	
+-+++ b/MaM 7/OpenEnroth/src/Io/KeyboardController.cpp	
+-@@ -2,7 +2,8 @@
+- 
+- #include "Library/Platform/Interface/PlatformEvents.h"
+- 
+--KeyboardController::KeyboardController() : PlatformEventFilter({EVENT_KEY_PRESS, EVENT_KEY_RELEASE}) {}
+-+KeyboardController::KeyboardController()
+-+    : PlatformEventFilter({EVENT_KEY_PRESS, EVENT_KEY_RELEASE, EVENT_GAMEPAD_KEY_PRESS, EVENT_GAMEPAD_KEY_RELEASE, EVENT_GAMEPAD_AXIS}) {}
+- 
+- bool KeyboardController::isKeyPressedThisFrame(PlatformKey key) const {
+-     if (key == PlatformKey::KEY_NONE)
+-@@ -32,6 +33,50 @@ bool KeyboardController::keyReleaseEvent(const PlatformKeyEvent *event) {
+-     return false;
+- }
+- 
+-+// The gamepad's buttons and sticks count as keys held down, the same way the actions bound to them are read.
+-+bool KeyboardController::gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) {
+-+    if (event->key == PlatformKey::KEY_NONE || _isKeyDown[event->key])
+-+        return false;
+-+    _isKeyDown[event->key] = true;
+-+    _isKeyPressedThisFrame[event->key] = true;
+-+    return false;
+-+}
+-+
+-+bool KeyboardController::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) {
+-+    if (event->key != PlatformKey::KEY_NONE)
+-+        _isKeyDown[event->key] = false;
+-+    return false;
+-+}
+-+
+-+bool KeyboardController::gamepadAxisEvent(const PlatformGamepadAxisEvent *event) {
+-+    // An axis arrives as its positive direction, a negative value means the other one. Tilted past half it is
+-+    // a key held down, back under half both directions are released.
+-+    PlatformKey positive = event->axis, negative = PlatformKey::KEY_NONE;
+-+    switch (positive) {
+-+    case PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT:  negative = PlatformKey::KEY_GAMEPAD_LEFTSTICK_LEFT; break;
+-+    case PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN:   negative = PlatformKey::KEY_GAMEPAD_LEFTSTICK_UP; break;
+-+    case PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT: negative = PlatformKey::KEY_GAMEPAD_RIGHTSTICK_LEFT; break;
+-+    case PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN:  negative = PlatformKey::KEY_GAMEPAD_RIGHTSTICK_UP; break;
+-+    default: break;
+-+    }
+-+    if (positive == PlatformKey::KEY_NONE)
+-+        return false;
+-+    PlatformKey down = event->value >= 0.5f ? positive : event->value <= -0.5f ? negative : PlatformKey::KEY_NONE;
+-+    for (PlatformKey key : {positive, negative}) {
+-+        if (key == PlatformKey::KEY_NONE)
+-+            continue;
+-+        if (key == down) {
+-+            if (!_isKeyDown[key]) {
+-+                _isKeyDown[key] = true;
+-+                _isKeyPressedThisFrame[key] = true;
+-+            }
+-+        } else {
+-+            _isKeyDown[key] = false;
+-+        }
+-+    }
+-+    return false;
+-+}
+-+
+- void KeyboardController::processMessages(PlatformEventHandler *eventHandler) {
+-     _isKeyPressedThisFrame.fill(false);
+-     ProxyEventLoop::processMessages(eventHandler);
+-diff --git a/MaM 7/OpenEnroth/src/Io/KeyboardController.h b/MaM 7/OpenEnroth/src/Io/KeyboardController.h
+-index 58e51717..fa07e1e2 100644
+---- a/MaM 7/OpenEnroth/src/Io/KeyboardController.h	
+-+++ b/MaM 7/OpenEnroth/src/Io/KeyboardController.h	
+-@@ -28,6 +28,9 @@ class KeyboardController: public PlatformEventFilter, public ProxyEventLoop {
+-  private:
+-     virtual bool keyPressEvent(const PlatformKeyEvent *event) override;
+-     virtual bool keyReleaseEvent(const PlatformKeyEvent *event) override;
+-+    virtual bool gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) override;
+-+    virtual bool gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) override;
+-+    virtual bool gamepadAxisEvent(const PlatformGamepadAxisEvent *event) override;
+-     virtual void processMessages(PlatformEventHandler *eventHandler) override;
+- 
+-  private:
+-diff --git a/MaM 7/nase-upravy-11-gamepad-autosave.patch b/MaM 7/nase-upravy-11-gamepad-autosave.patch
+-index a6fecc8e..e69de29b 100644
+---- a/MaM 7/nase-upravy-11-gamepad-autosave.patch	
+-+++ b/MaM 7/nase-upravy-11-gamepad-autosave.patch	
+-@@ -1,370 +0,0 @@
+--diff --git a/MaM 7/OpenEnroth/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java b/MaM 7/OpenEnroth/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java
+--index 50a0496b..f3417e75 100644
+----- a/MaM 7/OpenEnroth/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java	
+--+++ b/MaM 7/OpenEnroth/android/openenroth/src/main/java/org/openenroth/game/OpenEnroth.java	
+--@@ -11,7 +11,12 @@ import android.view.ViewGroup;
+-- import android.view.WindowInsets;
+-- import android.view.WindowInsetsController;
+-- 
+--+import android.view.InputDevice;
+--+import android.view.KeyEvent;
+--+import android.view.MotionEvent;
+--+
+-- import org.libsdl.app.SDLActivity;
+--+import org.libsdl.app.SDLControllerManager;
+-- 
+-- public class OpenEnroth extends SDLActivity {
+--     @Override
+--@@ -43,6 +48,40 @@ public class OpenEnroth extends SDLActivity {
+--         mLayout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> fitGameView());
+--     }
+-- 
+--+    /**
+--+     * Gamepad buttons go to the game whichever view has the focus. SDL only listens on its own surface, and with the
+--+     * touch controls on top of it the events were lost.
+--+     */
+--+    @Override
+--+    public boolean dispatchKeyEvent(KeyEvent event) {
+--+        int source = event.getSource();
+--+        boolean pad = (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+--+                || (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+--+                || (source & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD;
+--+        if (pad && SDLControllerManager.isDeviceSDLJoystick(event.getDeviceId())) {
+--+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+--+                if (event.getRepeatCount() == 0)
+--+                    SDLControllerManager.onNativePadDown(event.getDeviceId(), event.getKeyCode());
+--+                return true;
+--+            }
+--+            if (event.getAction() == KeyEvent.ACTION_UP) {
+--+                SDLControllerManager.onNativePadUp(event.getDeviceId(), event.getKeyCode());
+--+                return true;
+--+            }
+--+        }
+--+        return super.dispatchKeyEvent(event);
+--+    }
+--+
+--+    /** The sticks and triggers of a gamepad, the same way. */
+--+    @Override
+--+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+--+        int source = event.getSource();
+--+        if ((source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK && event.getAction() == MotionEvent.ACTION_MOVE
+--+                && SDLControllerManager.handleJoystickMotionEvent(event))
+--+            return true;
+--+        return super.dispatchGenericMotionEvent(event);
+--+    }
+--+
+--     @Override
+--     protected void onStop() {
+--         super.onStop();
+--diff --git a/MaM 7/OpenEnroth/src/Application/Game.cpp b/MaM 7/OpenEnroth/src/Application/Game.cpp
+--index b1604650..220df5d4 100644
+----- a/MaM 7/OpenEnroth/src/Application/Game.cpp	
+--+++ b/MaM 7/OpenEnroth/src/Application/Game.cpp	
+--@@ -118,6 +118,14 @@ static void setMinimapZoom(int zoom) {
+-- 
+-- Game::Game(PlatformApplication *application, std::shared_ptr<GameConfig> config) {
+--     _application = application;
+--+    // Ours: once per frame the gamepad cursor and the periodic autosave.
+--+    static PlatformApplication *app = nullptr;
+--+    app = application;
+--+    frameHook = [] {
+--+        if (GameWindowHandler *handler = app->component<GameWindowHandler>())
+--+            handler->gamepadTick();
+--+        periodicAutoSave();
+--+    };
+--     _config = config;
+--     _menu = std::make_unique<Menu>();
+--     _decalBuilder = EngineIocContainer::ResolveDecalBuilder();
+--diff --git a/MaM 7/OpenEnroth/src/Application/GameWindowHandler.cpp b/MaM 7/OpenEnroth/src/Application/GameWindowHandler.cpp
+--index badc6fd9..939dd5ed 100644
+----- a/MaM 7/OpenEnroth/src/Application/GameWindowHandler.cpp	
+--+++ b/MaM 7/OpenEnroth/src/Application/GameWindowHandler.cpp	
+--@@ -57,6 +57,7 @@ static char PlatformKeyToChar(PlatformKey key, PlatformModifiers mods) {
+-- 
+-- GameWindowHandler::GameWindowHandler() : PlatformEventFilter(EVENTS_ALL) {
+--     this->mouse = EngineIocContainer::ResolveMouse();
+--+    _padTickTime = std::chrono::steady_clock::now();
+-- }
+-- 
+-- GameWindowHandler::~GameWindowHandler() {}
+--@@ -558,12 +559,75 @@ bool GameWindowHandler::gamepadConnectionEvent(const PlatformGamepadEvent *event
+--     return false;
+-- }
+-- 
+--+bool GameWindowHandler::gamepadCursorMode() const {
+--+    return pArcomageGame->_gameInProgress || current_screen_type != SCREEN_GAME || GetCurrentMenuID() != MENU_NONE;
+--+}
+--+
+--+void GameWindowHandler::gamepadTick() {
+--+    auto now = std::chrono::steady_clock::now();
+--+    float seconds = std::chrono::duration<float>(now - _padTickTime).count();
+--+    _padTickTime = now;
+--+    if (!gamepadCursorMode() || !mouse || seconds <= 0 || seconds > 0.5f)
+--+        return;
+--+    // Past the dead zone the cursor moves up to 500 pixels a second (render coordinates, 640 x 480).
+--+    auto speed = [](float tilt) { return std::abs(tilt) < 0.2f ? 0.0f : tilt * std::abs(tilt) * 500; };
+--+    float dx = speed(_padCursorX) * seconds, dy = speed(_padCursorY) * seconds;
+--+    if (dx == 0 && dy == 0)
+--+        return;
+--+    Pointi position = mouse->position();
+--+    position.x = std::clamp(position.x + static_cast<int>(std::lround(dx)), 0, 639);
+--+    position.y = std::clamp(position.y + static_cast<int>(std::lround(dy)), 0, 479);
+--+    OnMouseMove(position, Pointi(0, 0), _padLeftDown, _padRightDown);
+--+}
+--+
+-- bool GameWindowHandler::gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) {
+--+    if (gamepadCursorMode() && mouse) {
+--+        Pointi position = mouse->position();
+--+        switch (event->key) {
+--+        case PlatformKey::KEY_GAMEPAD_A:
+--+            _padLeftDown = true;
+--+            OnMouseLeftClick(position, false);
+--+            return false;
+--+        case PlatformKey::KEY_GAMEPAD_X:
+--+            _padRightDown = true;
+--+            OnMouseRightClick(position);
+--+            return false;
+--+        case PlatformKey::KEY_GAMEPAD_B:
+--+            handleKeyPress(PlatformKey::KEY_ESCAPE, 0, false);
+--+            return false;
+--+        case PlatformKey::KEY_GAMEPAD_LEFT:
+--+        case PlatformKey::KEY_GAMEPAD_RIGHT:
+--+        case PlatformKey::KEY_GAMEPAD_UP:
+--+        case PlatformKey::KEY_GAMEPAD_DOWN: {
+--+            int step = 12;
+--+            position.x = std::clamp(position.x + (event->key == PlatformKey::KEY_GAMEPAD_RIGHT ? step : event->key == PlatformKey::KEY_GAMEPAD_LEFT ? -step : 0), 0, 639);
+--+            position.y = std::clamp(position.y + (event->key == PlatformKey::KEY_GAMEPAD_DOWN ? step : event->key == PlatformKey::KEY_GAMEPAD_UP ? -step : 0), 0, 479);
+--+            OnMouseMove(position, Pointi(0, 0), _padLeftDown, _padRightDown);
+--+            return false;
+--+        }
+--+        default:
+--+            break;
+--+        }
+--+    }
+--     handleKeyPress(event->key, 0, false);
+--     return false;
+-- }
+-- 
+-- bool GameWindowHandler::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) {
+--+    if (event->key == PlatformKey::KEY_GAMEPAD_A && _padLeftDown) {
+--+        _padLeftDown = false;
+--+        OnMouseLeftUp();
+--+        return false;
+--+    }
+--+    if (event->key == PlatformKey::KEY_GAMEPAD_X && _padRightDown) {
+--+        _padRightDown = false;
+--+        OnMouseRightUp();
+--+        return false;
+--+    }
+--+    if (event->key == PlatformKey::KEY_GAMEPAD_B && gamepadCursorMode()) {
+--+        handleKeyRelease(PlatformKey::KEY_ESCAPE);
+--+        return false;
+--+    }
+--     handleKeyRelease(event->key);
+--     return false;
+-- }
+--@@ -572,6 +636,21 @@ bool GameWindowHandler::gamepadAxisEvent(const PlatformGamepadAxisEvent *event)
+--     PlatformKey key = event->axis;
+--     float value = event->value;
+-- 
+--+    // Ours: both sticks remembered for the cursor (gamepadTick()); in the menus they do nothing else.
+--+    if (key == PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT || key == PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT)
+--+        _padCursorX = value;
+--+    if (key == PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN || key == PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN)
+--+        _padCursorY = value;
+--+    if (gamepadCursorMode()) {
+--+        // The walking keys the sticks held before the window opened are let go.
+--+        for (PlatformKey held : {PlatformKey::KEY_GAMEPAD_LEFTSTICK_LEFT, PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT,
+--+                                 PlatformKey::KEY_GAMEPAD_LEFTSTICK_UP, PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN,
+--+                                 PlatformKey::KEY_GAMEPAD_RIGHTSTICK_LEFT, PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT,
+--+                                 PlatformKey::KEY_GAMEPAD_RIGHTSTICK_UP, PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN})
+--+            handleKeyRelease(held);
+--+        return false;
+--+    }
+--+
+--     // TODO(captainurist): this is temporary, we need separate axis enum and proper axis handling
+--     if (value < 0) {
+--         if (key == PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT) {
+--diff --git a/MaM 7/OpenEnroth/src/Application/GameWindowHandler.h b/MaM 7/OpenEnroth/src/Application/GameWindowHandler.h
+--index b558e9f3..ae675b7c 100644
+----- a/MaM 7/OpenEnroth/src/Application/GameWindowHandler.h	
+--+++ b/MaM 7/OpenEnroth/src/Application/GameWindowHandler.h	
+--@@ -1,5 +1,6 @@
+-- #pragma once
+-- 
+--+#include <chrono>
+-- #include <memory>
+-- #include <tuple>
+-- #include <vector>
+--@@ -65,7 +66,20 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
+--     virtual bool gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) override;
+--     virtual bool gamepadAxisEvent(const PlatformGamepadAxisEvent *event) override;
+-- 
+--+ public:
+--+    /**
+--+     * Ours: once per frame. On any screen but the 3D view (menus, windows, dialogs, houses) the sticks move the mouse
+--+     * cursor, A clicks, X right-clicks, B is Escape, the d-pad nudges the cursor. In the 3D view the game's own
+--+     * bindings apply (left stick walks, right stick looks).
+--+     */
+--+    void gamepadTick();
+--+    /** True while the gamepad works as a mouse. */
+--+    bool gamepadCursorMode() const;
+--+
+--  private:
+--     std::shared_ptr<Io::Mouse> mouse = nullptr;
+--     bool _closing = false;
+--+    float _padCursorX = 0, _padCursorY = 0;  // The sticks' tilt for the cursor, -1..1.
+--+    std::chrono::steady_clock::time_point _padTickTime;
+--+    bool _padLeftDown = false, _padRightDown = false;
+-- };
+--diff --git a/MaM 7/OpenEnroth/src/Engine/EngineGlobals.cpp b/MaM 7/OpenEnroth/src/Engine/EngineGlobals.cpp
+--index 5ab0d507..1be6bd69 100644
+----- a/MaM 7/OpenEnroth/src/Engine/EngineGlobals.cpp	
+--+++ b/MaM 7/OpenEnroth/src/Engine/EngineGlobals.cpp	
+--@@ -12,8 +12,12 @@ PlatformEventHandler *eventHandler = nullptr;
+-- PlatformApplication *application = nullptr;
+-- 
+-- 
+--+void (*frameHook)() = nullptr;
+--+
+-- void detail::globalProcessMessages() {
+--     application->processMessages();
+--+    if (frameHook)
+--+        frameHook();
+-- 
+--     // Shows the on-screen keyboard on mobile while the player types a name.
+--     if (window && keyboardInputHandler) {
+--diff --git a/MaM 7/OpenEnroth/src/Engine/EngineGlobals.h b/MaM 7/OpenEnroth/src/Engine/EngineGlobals.h
+--index 0d89b4f6..65088f44 100644
+----- a/MaM 7/OpenEnroth/src/Engine/EngineGlobals.h	
+--+++ b/MaM 7/OpenEnroth/src/Engine/EngineGlobals.h	
+--@@ -7,6 +7,9 @@
+-- 
+-- class PlatformApplication;
+-- 
+--+/** Ours: called once per frame from every message loop of the game (the gamepad cursor, the periodic autosave). */
+--+extern void (*frameHook)();
+--+
+-- namespace detail {
+-- void globalProcessMessages();
+-- void globalWaitForMessages();
+--diff --git a/MaM 7/OpenEnroth/src/Engine/SaveLoad.cpp b/MaM 7/OpenEnroth/src/Engine/SaveLoad.cpp
+--index 0a044ad4..f0c204f0 100644
+----- a/MaM 7/OpenEnroth/src/Engine/SaveLoad.cpp	
+--+++ b/MaM 7/OpenEnroth/src/Engine/SaveLoad.cpp	
+--@@ -1,6 +1,7 @@
+-- #include "SaveLoad.h"
+-- 
+-- #include <cassert>
+--+#include <chrono>
+-- #include <unordered_map>
+-- #include <string>
+-- #include <string_view>
+--@@ -32,6 +33,7 @@
+-- #include "GUI/UI/UIStatusBar.h"
+-- 
+-- #include "Media/Audio/AudioPlayer.h"
+--+#include "Media/MediaPlayer.h"
+-- 
+-- #include "Library/Snapshots/SnapshotSerialization.h"
+-- #include "Library/Image/Pcx.h"
+--@@ -49,6 +51,7 @@ void loadGame(std::string_view fileName) {
+--     }
+--     engine->_lastLoadedSaveFileName = fileName;
+--     cheatImmortal = false;  // Ours: a loaded game starts honest.
+--+    periodicAutoSaveReset();
+-- 
+--     // TODO(captainurist): remained from Party::Reset, doesn't really belong here (or in Party::Reset).
+--     current_character_screen_window = WINDOW_CharacterWindow_Stats;
+--@@ -218,6 +221,38 @@ SaveGameHeader saveGame(bool isAutoSave, bool resetWorld, std::string_view path,
+--     return header;
+-- }
+-- 
+--+static std::chrono::steady_clock::time_point periodicAutoSaveLast = std::chrono::steady_clock::now();
+--+
+--+void periodicAutoSaveReset() {
+--+    periodicAutoSaveLast = std::chrono::steady_clock::now();
+--+}
+--+
+--+void periodicAutoSave() {
+--+    if (current_screen_type != SCREEN_GAME || GetCurrentMenuID() != MENU_NONE || !engine || !pParty ||
+--+        engine->_currentLoadedMapId == MAP_INVALID || engine->_currentLoadedMapId == MAP_ARENA || pMediaPlayer->IsMoviePlaying())
+--+        return;  // Only while playing; the clock runs on.
+--+    if (std::chrono::steady_clock::now() - periodicAutoSaveLast < std::chrono::minutes(5))
+--+        return;
+--+    periodicAutoSaveLast = std::chrono::steady_clock::now();
+--+    // The next of the ten slots: remembered in saves/auto.next.
+--+    int next = 0;
+--+    if (ufs->exists("saves/auto.next")) {
+--+        try {
+--+            next = std::clamp(std::stoi(std::string(ufs->read("saves/auto.next").str())), 0, 9);
+--+        } catch (...) {
+--+            next = 0;
+--+        }
+--+    }
+--+    std::string fileName = fmt::format("auto{:02}.mm7", next + 1);
+--+    try {
+--+        saveGame(true, false, fmt::format("saves/{}", fileName), fmt::format("Automaticky {:02}", next + 1));
+--+        ufs->write("saves/auto.next", Blob::fromString(std::to_string((next + 1) % 10)));
+--+        engine->_statusBar->setEvent(fmt::format("Hra automaticky ulo\x9e" "ena ({:02})", next + 1));
+--+    } catch (const std::exception &e) {
+--+        MM_WARNING("periodicAutoSave: {}", e.what());
+--+    }
+--+}
+--+
+-- void autoSave() {
+--     saveGame(true, false, fmt::format("saves/{}", autosaveFileName), localization->str(LSTR_AUTOSAVE));
+-- }
+--@@ -245,6 +280,7 @@ void doSavegame(std::string fileName, std::string_view title) {
+-- 
+-- void saveNewGame() {
+--     cheatImmortal = false;  // Ours.
+--+    periodicAutoSaveReset();
+--     engine->_currentLoadedMapId = MAP_EMERALD_ISLAND;
+--     engine->_lastLoadedSaveFileName.clear(); // Otherwise the save menu would pre-select a save from a previous playthrough.
+--     pParty->pos.x = 12552;
+--diff --git a/MaM 7/OpenEnroth/src/Engine/SaveLoad.h b/MaM 7/OpenEnroth/src/Engine/SaveLoad.h
+--index d56dbec2..5c6f5601 100644
+----- a/MaM 7/OpenEnroth/src/Engine/SaveLoad.h	
+--+++ b/MaM 7/OpenEnroth/src/Engine/SaveLoad.h	
+--@@ -50,6 +50,13 @@ void loadGame(std::string_view fileName);
+-- std::pair<SaveGameHeader, Blob> createSaveData(bool resetWorld, std::string_view title);
+-- SaveGameHeader saveGame(bool isAutoSave, bool resetWorld, std::string_view path, std::string_view title = {});
+-- void autoSave();
+--+/**
+--+ * Ours: every five minutes of play (on the game screen) the game is saved into "auto01.mm7".."auto10.mm7" in turn,
+--+ * the oldest one being overwritten. Called every frame.
+--+ */
+--+void periodicAutoSave();
+--+/** Restarts the five minutes (a game was loaded or started). */
+--+void periodicAutoSaveReset();
+-- 
+-- /**
+--  * Saves the game.
+--diff --git a/MaM 7/README.md b/MaM 7/README.md
+--index 990cd839..d6b8c8cc 100644
+----- a/MaM 7/README.md	
+--+++ b/MaM 7/README.md	
+--@@ -1,6 +1,6 @@
+-- # Might and Magic VII – Android port „MaM 7"
+-- 
+---- Engine: [OpenEnroth](https://github.com/OpenEnroth/OpenEnroth), přesný commit v `engine-upstream.txt`, naše změny v `nase-upravy.patch`, `nase-upravy-2-tablet-klavesnice.patch`, `nase-upravy-3-dialog-bez-klavesnice.patch`, `nase-upravy-4-synchronizace-savu.patch`, `nase-upravy-5-teleport-harmondale-ostrov.patch`, `nase-upravy-6-kraj-etapa1.patch`, `nase-upravy-7-kraj-etapa2.patch`, `nase-upravy-8-schody-pod-nohama.patch` `nase-upravy-9-arcomage-chybejici-hospody.patch` a `nase-upravy-10-cheat-nesmrtelnost.patch` (aplikovat v tomto pořadí). Verze před teleportem je v gitu označená tagem `mam7-pred-teleportem`.
+--+- Engine: [OpenEnroth](https://github.com/OpenEnroth/OpenEnroth), přesný commit v `engine-upstream.txt`, naše změny v `nase-upravy.patch`, `nase-upravy-2-tablet-klavesnice.patch`, `nase-upravy-3-dialog-bez-klavesnice.patch`, `nase-upravy-4-synchronizace-savu.patch`, `nase-upravy-5-teleport-harmondale-ostrov.patch`, `nase-upravy-6-kraj-etapa1.patch`, `nase-upravy-7-kraj-etapa2.patch`, `nase-upravy-8-schody-pod-nohama.patch` `nase-upravy-9-arcomage-chybejici-hospody.patch` `nase-upravy-10-cheat-nesmrtelnost.patch` a `nase-upravy-11-gamepad-autosave.patch` (aplikovat v tomto pořadí). Verze před teleportem je v gitu označená tagem `mam7-pred-teleportem`.
+-- - Zdrojáky s úpravami: `OpenEnroth/`
+-- - Herní data z GOG s českým překladem (`Events.lod`, `ICONS.LOD`): `gamedata/mm7/`. Anglické originály obou souborů: `gamedata-en-backup/`.
+-- - Balíček `cz.mm7.game`, ikona gryfa z `MM7-Rel.exe`, podpisový klíč `out/keystore.jks`.
+--@@ -72,6 +72,14 @@ Vývojová smyčka k tomu umí nahrát uloženou pozici: soubory `devout7/saves/
+-- 
+-- Deset stisků klávesy Y (tlačítko „Y křik“) za sebou – každý do dvou sekund od předchozího a bez jiné klávesy mezi nimi – zapne cheat: ve stavovém řádku se objeví „Nesmrtelnost a neomezená mana zapnuta“, postavy nedostávají žádné zranění a jejich zdraví i mana se drží na maximu. Dalších deset Y cheat vypne. Nikam se neukládá: načtení pozice, nová hra i vypnutí hry ho zruší. Kód: `cheatImmortal` v `src/Engine/Party.h`, počítání v `src/Io/KeyboardInputHandler.cpp` (klávesa Y je zároveň „Ano“, proto se porovnávají klávesy, ne akce), úprava `nase-upravy-10-cheat-nesmrtelnost.patch`. Ověřeno na emulátoru (hláška po desátém stisku), samotné nezranitelnosti jen v kódu.
+-- 
+--+## Gamepad
+--+
+--+Engine má ovládání gamepadem od začátku (levá páčka chůze, pravá rozhlížení, A akce, L1 útok, R1 rychlé kouzlo, Y skok, Start boj po tazích, křížek nahoru/dolů/vlevo poznámky, kniha kouzel, mapa), ale na Androidu se jeho události do hry nedostávaly: SDL je čte jen ze svého vlastního zobrazení, a nad ním leží dotykové ovládání. `OpenEnroth.java` teď tlačítka i páčky gamepadu předává SDL přímo (`dispatchKeyEvent`, `dispatchGenericMotionEvent`). V nabídkách, oknech, dialozích a domech gamepad navíc ovládá kurzor myši: páčky jím hýbou, A je levé tlačítko, X pravé, B je Escape, křížek kurzor posouvá po krocích (`GameWindowHandler::gamepadTick`). Ve 3D pohledu platí původní vazby. Ověřit jde jen na skutečném zařízení, emulátor gamepad nemá.
+--+
+--+## Automatické ukládání po pěti minutách
+--+
+--+Každých pět minut hraní (počítá se jen čas na herní obrazovce, ne v nabídkách a při videích) se hra uloží do `auto01.mm7` až `auto10.mm7` – postupně dokola, nejstarší se přepíše. Pořadí si pamatuje soubor `saves/auto.next`. Pozice se v seznamu načtení jmenují „Automaticky 01“ až „Automaticky 10“, ve stavovém řádku se objeví „Hra automaticky uložena (NN)“. Načtení pozice a nová hra odpočet začnou znovu. Kód: `periodicAutoSave` v `src/Engine/SaveLoad.cpp`, volá se každý snímek přes `frameHook` v `src/Engine/EngineGlobals.cpp`. Ověřeno v PC smyčce.
+--+
+-- ## Rozšíření „Stín nad Krajem“ (rozpracované)
+-- 
+-- Scénář a stav: [`dlc-kraj/SCENAR.md`](dlc-kraj/SCENAR.md). Obsah rozšíření je v `gamedata/mm7/DATA/kraj.lod` (vlastní archiv, původní LOD soubory se nemění), vytváří ho `python dlc-kraj/tools/gen_kraj.py gamedata/mm7/DATA/games.lod gamedata/mm7/DATA/kraj.lod`. Engine čte mapy, tabulky i obrázky nejdřív z `kraj.lod` a pak z původních archivů (`GamesLod`, `ResourceManager::krajData`, `LodTextureCache::openKraj`). Nová mapa má číslo 77 (`MAP_SHIRE`), řádek tabulky map je v `kmapstats.txt`. Úpravy enginu etapy 1: `nase-upravy-6-kraj-etapa1.patch`, etapy 2 (Hobitín: domy, obyvatelé, rozhovory, obrázky interiérů): `nase-upravy-7-kraj-etapa2.patch`. Verze před rozšířením: tag `mam7-pred-kraj`, APK `out/zaloha/MaM7-pred-krajem.apk`.

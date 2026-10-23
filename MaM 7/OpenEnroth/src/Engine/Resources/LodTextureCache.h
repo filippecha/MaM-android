@@ -19,6 +19,11 @@ class LodTextureCache {
 
     void open(Blob blob);
 
+    /**
+     * Lays the images of the MaM 7 expansion "Stín nad Krajem" (data/kraj.lod) over this LOD, they are looked up first.
+     */
+    void openKraj(Blob blob);
+
     void reserveLoadedTextures();
     void releaseUnreserved();
 
@@ -31,7 +36,11 @@ class LodTextureCache {
     bool LoadTextureFromLOD(LodImage *pOutTex, std::string_view pContainer);
 
  private:
+    const LodReader &readerFor(std::string_view pContainer) const;
+
     LodReader _reader;
+    LodReader _krajReader;
+    bool _hasKraj = false;
     int _reservedCount = 0;
     std::unordered_map<std::string, LodImage> _textureByName;
     std::vector<std::string> _texturesInOrder;

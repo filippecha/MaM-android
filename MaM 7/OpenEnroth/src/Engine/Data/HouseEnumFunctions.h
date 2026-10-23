@@ -52,14 +52,24 @@ inline bool isBoat(HouseId houseId) {
 }
 
 inline bool isTavern(HouseId houseId) {
-    return houseId >= HOUSE_FIRST_TAVERN && houseId <= HOUSE_LAST_TAVERN;
+    return (houseId >= HOUSE_FIRST_TAVERN && houseId <= HOUSE_LAST_TAVERN) || houseId == HOUSE_TAVERN_SHIRE;
 }
 
 inline bool isArcomageTavern(HouseId houseId) {
     return houseId >= HOUSE_FIRST_ARCOMAGE_TAVERN && houseId <= HOUSE_LAST_ARCOMAGE_TAVERN;
 }
 
+/**
+ * @param houseId                       Tavern.
+ * @return                              Tavern whose Arcomage rules apply. The Hobbiton tavern plays by the rules of
+ *                                      Harmondale and doesn't count towards the Arcomage champion quest.
+ */
+inline HouseId arcomageRulesTavern(HouseId houseId) {
+    return houseId == HOUSE_TAVERN_SHIRE ? HOUSE_TAVERN_HARMONDALE : houseId;
+}
+
 inline int arcomageTopicForTavern(HouseId houseId) {
+    houseId = arcomageRulesTavern(houseId);
     assert(isArcomageTavern(houseId));
     return std::to_underlying(houseId) - std::to_underlying(HOUSE_FIRST_ARCOMAGE_TAVERN) + 355;
 }

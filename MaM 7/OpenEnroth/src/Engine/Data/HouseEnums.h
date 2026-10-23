@@ -585,6 +585,9 @@ enum class HouseId {
 };
 using enum HouseId;
 
+/** Hobbiton tavern of the MaM 7 expansion "Stín nad Krajem", it takes an unused tavern slot of the house table. */
+inline constexpr HouseId HOUSE_TAVERN_SHIRE = HOUSE_121;
+
 enum class HouseType : uint16_t {
     HOUSE_TYPE_INVALID = 0,
     HOUSE_TYPE_WEAPON_SHOP = 1,

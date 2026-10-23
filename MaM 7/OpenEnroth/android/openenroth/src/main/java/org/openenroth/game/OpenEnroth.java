@@ -11,7 +11,12 @@ import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+
 import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLControllerManager;
 
 public class OpenEnroth extends SDLActivity {
     @Override
@@ -41,6 +46,40 @@ public class OpenEnroth extends SDLActivity {
         }
 
         mLayout.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> fitGameView());
+    }
+
+    /**
+     * Gamepad buttons go to the game whichever view has the focus. SDL only listens on its own surface, and with the
+     * touch controls on top of it the events were lost.
+     */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        int source = event.getSource();
+        boolean pad = (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                || (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (source & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD;
+        if (pad && SDLControllerManager.isDeviceSDLJoystick(event.getDeviceId())) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0)
+                    SDLControllerManager.onNativePadDown(event.getDeviceId(), event.getKeyCode());
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                SDLControllerManager.onNativePadUp(event.getDeviceId(), event.getKeyCode());
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    /** The sticks and triggers of a gamepad, the same way. */
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        int source = event.getSource();
+        if ((source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK && event.getAction() == MotionEvent.ACTION_MOVE
+                && SDLControllerManager.handleJoystickMotionEvent(event))
+            return true;
+        return super.dispatchGenericMotionEvent(event);
     }
 
     @Override

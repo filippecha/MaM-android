@@ -1,15 +1,16 @@
---- a/src/Application/Game.cpp	2026-09-29 14:13:06.017773800 +0200
-+++ b/src/Application/Game.cpp	2026-09-29 14:13:06.084287200 +0200
-@@ -1,6 +1,8 @@
+--- a/src/Application/Game.cpp	2026-09-29 22:31:46.710621100 +0200
++++ b/src/Application/Game.cpp	2026-09-29 22:31:46.897114500 +0200
+@@ -1,6 +1,9 @@
  #include "Game.h"
  
  #include <algorithm>
 +#include <cstdio>
 +#include <cstdlib>
++#include "Engine/Tables/DecorationTable.h"
  #include <array>
  #include <cassert>
  #include <optional>
-@@ -1629,6 +1631,31 @@
+@@ -1629,6 +1632,81 @@
          do {
              MessageLoopWithWait();
  
@@ -24,18 +25,68 @@
 +                if (const char *devBit = std::getenv("OE_DEV_QBIT"); devBit && *devBit && devHookFrames == 60)
 +                    pParty->_questBits.set(static_cast<QuestBit>(std::atoi(devBit)));
 +                if (const char *devPos = std::getenv("OE_DEV_POS"); devPos && *devPos && devHookFrames == 150) {
-+                    int x = 0, y = 0, yaw = 0;
-+                    if (std::sscanf(devPos, "%d,%d,%d", &x, &y, &yaw) == 3)
-+                        placeParty(PartyPlacement(Vec3f(x, y, pParty->pos.z), yaw, 0, 0));
++                    int x = 0, y = 0, yaw = 0, z = pParty->pos.z; // An optional fourth number is the height.
++                    if (std::sscanf(devPos, "%d,%d,%d,%d", &x, &y, &yaw, &z) >= 3)
++                        placeParty(PartyPlacement(Vec3f(x, y, z), yaw, 0, 0));
 +                }
++                if (std::getenv("OE_DEV_DECOS") && devHookFrames == 120)
++                    for (size_t i = 0; i < pLevelDecorations.size(); i++)
++                        MM_WARNING("Dev: deco {} {} '{}' at {} {} {} event {}", i, pDecorationTable->decoration(pLevelDecorations[i].uDecorationDescID)->internalName, pDecorationTable->decoration(pLevelDecorations[i].uDecorationDescID)->hint, pLevelDecorations[i].vPosition.x, pLevelDecorations[i].vPosition.y, pLevelDecorations[i].vPosition.z, pLevelDecorations[i].uEventID);
++                if (const char *tex = std::getenv("OE_DEV_FACES"); tex && devHookFrames == 120 && uCurrentlyLoadedLevelType == LEVEL_INDOOR)
++                    for (const BLVFace &face : pIndoor->faces)
++                        if (face.texture && face.texture->name() == tex)
++                            MM_WARNING("Dev: face {} {}-{} {}-{} {}-{}", face.texture->name(), face.boundingBox.x1, face.boundingBox.x2, face.boundingBox.y1, face.boundingBox.y2, face.boundingBox.z1, face.boundingBox.z2);
 +                if (std::getenv("OE_DEV_DUMP") && devHookFrames == 120)
 +                    for (int id = 0; id < 2000; id++)
 +                        if (engine->_localEventMap.hasEvent(id))
 +                            for (const EvtInstruction &ir : engine->_localEventMap.function(id))
 +                                if (ir.opcode == EVENT_MoveToMap)
 +                                    MM_WARNING("Dev: event {} {}", id, ir.toString());
-+                if (std::getenv("OE_DEV_LOGPOS") && devHookFrames % 60 == 0)
-+                    MM_WARNING("Dev: map {} party {} {} {} yaw {}", std::to_underlying(engine->_currentLoadedMapId), pParty->pos.x, pParty->pos.y, pParty->pos.z, pParty->_viewYaw);
++                // OE_DEV_OLDSAVE=1 drops the Shire delta like a save from before the expansion, OE_DEV_SAVETEST=1 quick
++                // saves, moves the party away and quick loads.
++                if (std::getenv("OE_DEV_OLDSAVE") && devHookFrames == 55)
++                    pMapDeltas.erase("out16.ddm");
++                // OE_DEV_OLDSAVE=2 is a save of the expansion's stage 1: a Shire delta without models, no hobbits.
++                if (const char *old = std::getenv("OE_DEV_OLDSAVE"); old && std::string_view(old) == "2" && devHookFrames == 56) {
++                    std::vector<uint32_t> fake(600, 0);
++                    fake[5] = 1189;
++                    pMapDeltas["out16.ddm"] = Blob::fromString(std::string(reinterpret_cast<const char *>(fake.data()), fake.size() * 4));
++                    for (int i = 447; i <= 500; i++)
++                        pNPCStats->pNPCData[i] = NPCData();
++                }
++                if (std::getenv("OE_DEV_SAVETEST") && devHookFrames == 400) {
++                    quickSaveGame();
++                    MM_WARNING("Dev: saved at {} {}", pParty->pos.x, pParty->pos.y);
++                }
++                if (std::getenv("OE_DEV_SAVETEST") && devHookFrames == 460)
++                    placeParty(PartyPlacement(pParty->pos + Vec3f(2000, 2000, 0), pParty->_viewYaw, 0, 0));
++                if (std::getenv("OE_DEV_SAVETEST") && devHookFrames == 520) {
++                    MM_WARNING("Dev: loading, now at {} {}", pParty->pos.x, pParty->pos.y);
++                    quickLoadGame();
++                }
++                if (std::getenv("OE_DEV_DOORS") && devHookFrames % 300 == 120 && uCurrentlyLoadedLevelType == LEVEL_INDOOR) {
++                    for (const BLVDoor &door : pIndoor->doors) {
++                        MM_WARNING("Dev: door {} state {} attrs {:x} verts {} sectors {} offsets {} speed {} {} faces {} dir {} {} {} len {}", door.doorId, std::to_underlying(door.state), static_cast<uint32_t>(door.attributes), door.numVertices, door.numSectors, door.numOffsets, door.openSpeed, door.closeSpeed, door.numFaces, door.direction.x, door.direction.y, door.direction.z, door.moveLength);
++                        for (int i = 0; i < door.numVertices; i++)
++                            MM_WARNING("Dev:   door {} vertex {} at {} {} {} offsets {} {} {}", door.doorId, door.pVertexIDs[i], pIndoor->vertices[door.pVertexIDs[i]].x, pIndoor->vertices[door.pVertexIDs[i]].y, pIndoor->vertices[door.pVertexIDs[i]].z, door.pXOffsets[i], door.pYOffsets[i], door.pZOffsets[i]);
++                        for (int i = 0; i < door.numFaces; i++) {
++                            const BLVFace &face = pIndoor->faces[door.pFaceIDs[i]];
++                            MM_WARNING("Dev:   door {} face {} tex {} attrs {:x} poly {} sector {} {} bbox {}-{} {}-{} {}-{}", door.doorId, door.pFaceIDs[i], face.texture ? face.texture->name() : "-", static_cast<uint32_t>(face.attributes), std::to_underlying(face.polygonType), face.sectorId, face.backSectorId, face.boundingBox.x1, face.boundingBox.x2, face.boundingBox.y1, face.boundingBox.y2, face.boundingBox.z1, face.boundingBox.z2);
++                        }
++                    }
++                    for (const BLVFace &face : pIndoor->faces)
++                        if (face.eventId)
++                            MM_WARNING("Dev: event face {} event {} tex {} attrs {:x} bbox {}-{} {}-{} {}-{}", face.faceId, face.eventId, face.texture ? face.texture->name() : "-", static_cast<uint32_t>(face.attributes), face.boundingBox.x1, face.boundingBox.x2, face.boundingBox.y1, face.boundingBox.y2, face.boundingBox.z1, face.boundingBox.z2);
++                }
++                if (const char *devEvent = std::getenv("OE_DEV_EVENT"); devEvent && *devEvent && devHookFrames == 240)
++                    eventProcessor(std::atoi(devEvent), Pid(), 1);
++                if (const char *devChest = std::getenv("OE_DEV_CHEST"); devChest && *devChest && devHookFrames == 240)
++                    Chest::open(std::atoi(devChest), Pid());
++                if (std::getenv("OE_DEV_ACTORS") && devHookFrames % 120 == 0)
++                    for (const Actor &actor : pActors)
++                        MM_WARNING("Dev: actor {} monster {} group {} attrs {:x} ai {} hp {} pos {} {} {}", actor.id, std::to_underlying(actor.monsterInfo.id), actor.group, static_cast<uint32_t>(actor.attributes), std::to_underlying(actor.aiState), actor.hp, actor.pos.x, actor.pos.y, actor.pos.z);
++                if (const char *logPos = std::getenv("OE_DEV_LOGPOS"); logPos && devHookFrames % (std::atoi(logPos) == 2 ? 1 : 60) == 0)
++                    MM_WARNING("Dev: map {} party {} {} {} yaw {} golem qbits {}{}{}{} velocity {} {} {} dt {}", std::to_underlying(engine->_currentLoadedMapId), pParty->pos.x, pParty->pos.y, pParty->pos.z, pParty->_viewYaw, pParty->_questBits.test(static_cast<QuestBit>(71)), pParty->_questBits.test(static_cast<QuestBit>(72)), pParty->_questBits.test(static_cast<QuestBit>(73)), pParty->_questBits.test(static_cast<QuestBit>(74)), pParty->velocity.x, pParty->velocity.y, pParty->velocity.z, gameTimer->dt().ticks());
 +            }
 +
              engine->particle_engine->UpdateParticles();

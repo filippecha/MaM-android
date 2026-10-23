@@ -5,7 +5,7 @@
 class GUIWindow_Chest : public GUIWindow {
  public:
     explicit GUIWindow_Chest(int chestId);
-    virtual ~GUIWindow_Chest() {}
+    virtual ~GUIWindow_Chest();
 
     virtual void Update() override;
 
@@ -15,4 +15,6 @@ class GUIWindow_Chest : public GUIWindow {
 
  private:
     int _chestId = 0;
+    GUIButton *_takeAllButton = nullptr;
+    GraphicsImage *_takeAllTexture = nullptr;  // The exit button's plaque with its baked-in caption tiled over.
 };

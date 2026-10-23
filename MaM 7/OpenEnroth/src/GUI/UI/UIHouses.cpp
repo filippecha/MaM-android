@@ -56,7 +56,7 @@ GraphicsImage *_591428_endcap = nullptr;
 std::vector<HouseNpcDesc> houseNpcs;
 int currentHouseNpc;
 
-std::array<const HouseAnimDescr, 196> pAnimatedRooms = { {  // 0x4E5F70
+std::array<const HouseAnimDescr, 201> pAnimatedRooms = { {  // 0x4E5F70
     { "", 0x4, 0x1F4, HOUSE_TYPE_INVALID, 0, 0 },
     { "Human Armor01", 0x20, 0x2C0, HOUSE_TYPE_ARMOR_SHOP, 58, 0 },
     { "Necromancer Armor01", 0x20, 0x2D7, HOUSE_TYPE_ARMOR_SHOP, 70, 0 },
@@ -252,7 +252,14 @@ std::array<const HouseAnimDescr, 196> pAnimatedRooms = { {  // 0x4E5F70
     { "Out02 Castle Harmondy Abandoned", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 },
     { "Human Temple02", 0x24, 0x3AB, HOUSE_TYPE_TEMPLE, 27, 0 },
     { "Player Castle Good", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 },
-    { "Player Castle Bad", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 }
+    { "Player Castle Bad", 0x24, 0, HOUSE_TYPE_CASTLE, 0, 0 },
+
+    // Hobbiton of the "Stín nad Krajem" expansion, still pictures in icons.lod instead of movies.
+    { "krajnora", 8, 0, HOUSE_TYPE_HOUSE, 0, 0 },
+    { "krajhospoda", 0xD, 615, HOUSE_TYPE_TAVERN, 49, 0 },
+    { "krajobchod", 0xE, 9, HOUSE_TYPE_ALCHEMY_SHOP, 0, 0 },
+    { "krajlecitel", 0x24, 171, HOUSE_TYPE_TEMPLE, 50, 3 },
+    { "krajkovar", 0x16, 613, HOUSE_TYPE_WEAPON_SHOP, 45, 4 }
 } };
 
 const IndexedArray<int, HOUSE_TYPE_WEAPON_SHOP, HOUSE_TYPE_DARK_GUILD> itemAmountInShop = {{

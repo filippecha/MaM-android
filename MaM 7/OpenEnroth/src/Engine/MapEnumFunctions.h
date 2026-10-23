@@ -6,7 +6,7 @@
  * Is map an outdoor map?
  */
 inline bool isMapOutdoor(MapId mapid) {
-    return mapid >= MAP_EMERALD_ISLAND && mapid <= MAP_SHOALS && mapid != MAP_PIT && mapid != MAP_CELESTE;
+    return (mapid >= MAP_EMERALD_ISLAND && mapid <= MAP_SHOALS && mapid != MAP_PIT && mapid != MAP_CELESTE) || mapid == MAP_SHIRE;
 }
 
 /**
