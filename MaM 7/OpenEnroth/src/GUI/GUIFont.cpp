@@ -12,6 +12,9 @@
 
 #include "Engine/Graphics/Renderer/Renderer.h"
 #include "Engine/Graphics/Image.h"
+#include "Engine/Graphics/HdTextures.h"
+
+#include "Library/Image/PixelScale.h"
 
 static Color parseColorTag(const char *tag, const Color &defaultColor) {
     char color_code[20];
@@ -46,21 +49,35 @@ void GUIFont::CreateFontTex() {
 
     _layout = AtlasLayout({16, 16}, {32, 32});
 
-    RgbaImage pixels = RgbaImage::solid(Color(), _layout.geometry().size());
+    // Ours: the glyphs are pixel art too, Scale2x/Scale3x on their 0/1/2 values keeps the atlas layout logical and
+    // the texture `scale` times bigger.
+    int scale = spriteScale();
+    if (scale != 2 && scale != 3)
+        scale = 1;
+    Sizei atlasSize = _layout.geometry().size();
+    RgbaImage pixels = RgbaImage::solid(Color(), atlasSize.w * scale, atlasSize.h * scale);
 
     // Pack per-channel color weights: R is for text, G is for shadow, B & A are reserved for multi-color fonts
     // (MM3 fonts use 4 colors and we will import them eventually).
     for (size_t l = 0; l < _layout.size(); l++) {
         Recti cell = _layout[l];
+        GrayscaleImage scaled;
         GrayscaleImageView image = _font.image(l);
+        if (scale == 2) {
+            scaled = scale2x(image);
+            image = scaled;
+        } else if (scale == 3) {
+            scaled = scale3x(image);
+            image = scaled;
+        }
 
         for (int y = 0; y < image.height(); y++)
             for (int x = 0; x < image.width(); x++)
                 if (uint8_t pixel = image[y][x])
-                    pixels[cell.y + y][cell.x + x] = pixel == 1 ? Color(0, 255, 0, 0) : Color(255, 0, 0, 0);
+                    pixels[cell.y * scale + y][cell.x * scale + x] = pixel == 1 ? Color(0, 255, 0, 0) : Color(255, 0, 0, 0);
     }
 
-    _texture = GraphicsImage::Create(std::move(pixels));
+    _texture = GraphicsImage::Create(std::move(pixels), scale);
 }
 
 void GUIFont::ReleaseFontTex() {

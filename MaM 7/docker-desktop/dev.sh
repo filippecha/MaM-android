@@ -19,12 +19,12 @@ echo "build ok"
 printf "pcm.!default { type null }
 ctl.!default { type hw card 0 }
 " > ~/.asoundrc
-Xvfb :99 -screen 0 640x480x24 >/dev/null 2>&1 &
+Xvfb :99 -screen 0 ${OE_DEV_SCREEN:-640x480}x24 >/dev/null 2>&1 &
 sleep 2
 export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 OPENENROTH_MM7_PATH=/game
 rm -rf /root/.openenroth
 # OE_DEV_INI="[debug]\nno_actors = true" writes debug settings into a fresh openenroth.ini.
-if [ -n "${OE_DEV_INI:-}" ]; then mkdir -p /root/.openenroth && printf "$OE_DEV_INI\n" > /root/.openenroth/openenroth.ini; fi
+if [ -n "${OE_DEV_INI:-}" ]; then mkdir -p /root/.openenroth && printf "%s\n" "$OE_DEV_INI" | tr ";" "\n" > /root/.openenroth/openenroth.ini; fi  # ";" separates lines too.
 # Saves from devout7/saves are offered in the load dialog.
 if [ -d /out/saves ]; then mkdir -p /root/.openenroth/saves && cp /out/saves/*.mm7 /root/.openenroth/saves/; fi
 rm -f /out/shot-*.png

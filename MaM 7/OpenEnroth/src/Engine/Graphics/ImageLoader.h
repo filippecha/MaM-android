@@ -16,9 +16,11 @@ class ImageLoader {
     const std::string &GetResourceName() const { return this->resource_name; }
 
     virtual bool Load(RgbaImage *rgbaImage) = 0;
+    int scale() const { return _scale; }
 
  protected:
     std::string resource_name;
+    int _scale = 1;  // Ours: texture pixels per logical pixel, 2 for HD replacements and scaled sprites.
 };
 
 class Paletted_Img_Loader : public ImageLoader {

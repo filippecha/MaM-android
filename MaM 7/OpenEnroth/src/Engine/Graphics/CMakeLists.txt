@@ -12,6 +12,7 @@ set(ENGINE_GRAPHICS_SOURCES
         FrameLimiter.cpp
         Image.cpp
         ImageLoader.cpp
+        HdTextures.cpp
         Indoor.cpp
         Lighting.cpp
         LightsStack.cpp

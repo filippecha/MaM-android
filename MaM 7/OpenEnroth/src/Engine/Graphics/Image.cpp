@@ -20,6 +20,12 @@ GraphicsImage *GraphicsImage::Create(RgbaImage image) {
     return result;
 }
 
+GraphicsImage *GraphicsImage::Create(RgbaImage image, int scale) {
+    GraphicsImage *result = Create(std::move(image));
+    result->_scale = scale;
+    return result;
+}
+
 GraphicsImage *GraphicsImage::Create(int width, int height) {
     assert(width > 0 && height > 0);
     return Create(RgbaImage::solid(Color(), width, height));
@@ -37,15 +43,15 @@ GraphicsImage *GraphicsImage::Create(std::unique_ptr<ImageLoader> loader) {
 }
 
 int GraphicsImage::width() {
-    return rgba().width();
+    return rgba().width() / _scale;
 }
 
 int GraphicsImage::height() {
-    return rgba().height();
+    return rgba().height() / _scale;
 }
 
 Sizei GraphicsImage::size() {
-    return rgba().size();
+    return {width(), height()};
 }
 
 RgbaImage &GraphicsImage::rgba() {
@@ -92,6 +98,7 @@ bool GraphicsImage::initialize() {
 
     assert(_loader);
     _initialized = _loader->Load(&_rgba);
+    _scale = _loader->scale();
     // TODO(captainurist): _initialized == false happens, investigate
 
     return _initialized;

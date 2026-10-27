@@ -330,7 +330,32 @@ G9) Tlačítko „Vzít vše" v truhle
   tím je po zvětšení stejně tmavý a hladký jako zapečené „Zavřít". Pozor na „\x9ae": escape \x9a
   a e rozděl na dva literály.
 
-G10) Další úpravy, které už máme a jsou popsané v README.md projektu
+G10) HD grafika (jedna verze, bez přepínače)
+- Rozlišení: engine kreslí do framebufferu 640×480 a UI má souřadnice napevno, render_filter = 0
+  nepoužívej (2D zůstane v rohu). Udělej framebuffer k‑násobný (graphics.render_scale, 0 = nejmenší
+  celé číslo, které pokryje okno, zaokrouhluj nahoru), v OpenGLRenderer násob k jen glViewport,
+  glScissor, velikost framebufferu, glBlitFramebuffer a čtení pixelů; ortho projekce zůstane
+  0..640 × 0..480, takže GPU zvětší 2D vrstvu a herní kód, pViewport i myš zůstanou v logických
+  640×480. GetRenderDimensions dál vrací 640×480.
+- Textury: textury z bitmaps.lod (bez palet, masek, cedulí a bannerů s písmem) zvětši 4× (Remacri přes
+  spandrel, GPU v Dockeru s --gpus all, obtočený okraj 16 px kvůli bezešvosti) do
+  gamedata/mm7/hd/bitmaps/<jméno>.jpg (kvalita 90, bez podvzorkování), 12 průhledných
+  (transparentTextures v ImageLoader.cpp) jako PNG s alfou. V enginu loadHdBitmap: najde PNG/JPG (JPEG
+  přes stb_image), zkontroluje násobek velikosti, podle graphics.hd_textures (0, 2, 4, -1 = podle paměti)
+  zmenší plošným filtrem, u Bitmaps_LOD_Loader aplikuje odbarvení jako createLoadedPalette. Volej na
+  konci Bitmaps_LOD_Loader::Load a v TileGenerator::loadTile. Sada musí být úplná, smíchané 128/512 px
+  dlaždice si v GL texture arrays prohodí vrstvy.
+- UI: obrázky z icons.lod zvětši 4× (PAD_MODE=reflect) do hd/icons/<jméno>.jpg. V enginu applyHdIcon
+  na konci loaderů ColorKey, Alpha a PCX: barvy z HD zmenšené plošným filtrem přesně na render_scale,
+  alfa z původního obrázku, loader si uloží scale a GraphicsImage vrací width()/height() logické
+  (textura / scale). Minimapy (getImage_Solid) nenahrazuj, kód je čte po pixelech. Kód, který čte
+  pixely (BlendTextures), násob scale.
+- Sprity a písmo: Scale2x/Scale3x na paletových indexech v Sprites_LOD_Loader a v GUIFont::CreateFontTex
+  (atlas zůstane logický, textura scale× větší), graphics.sprite_scale 0 = podle render_scale, na
+  Androidu nejvýš 2. AI sprity nedělej: 9192 z 9221 snímků má v tabulce jinou paletu než sprite
+  (barevné varianty nestvůr) a shader přes paletu svítí, barevný obrázek to zničí.
+
+G11) Další úpravy, které už máme a jsou popsané v README.md projektu
 - Družina na obřích schodech Titánské pevnosti (nepropadá pod stupně), karta Úspěchy vypisuje
   hospody bez výhry v Arcomage, rozšíření „Stín nad Krajem" (vlastní kraj.lod). Postupuj podle
   README a patchů nase-upravy-*.patch ve veřejném repozitáři MaM-android (složka MaM 7).

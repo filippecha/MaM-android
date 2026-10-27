@@ -25,42 +25,42 @@ GUIWindow_Chest::GUIWindow_Chest(int chestId) : GUIWindow(WINDOW_Chest, {0, 0}, 
     // Ours: everything out of the chest at once, above the exit button.
     _takeAllButton = CreateButton({471, 400}, {169, 35}, BUTTON_TYPE_NORMAL, 0, UIMSG_CHEST_TakeAll, 0, INPUT_ACTION_INVALID,
                                   "Vz\xedt v\x9a" "e", {ui_exit_cancel_button_background});
+    // The texture may be an HD replacement, s texture pixels per logical pixel.
+    int s = ui_exit_cancel_button_background->scale();
     RgbaImage plaque = RgbaImage::copy(ui_exit_cancel_button_background->rgba());
-    if (plaque.width() == 169 && plaque.height() == 35) {
+    if (plaque.width() == 169 * s && plaque.height() == 35 * s) {
         // The caption sits on the plaque at x 53..118, y 8..27. The 14 blank columns left of it repeat over it.
-        for (int y = 8; y < 28; y++)
-            for (int x = 53; x < 119; x++)
-                plaque[y][x] = plaque[y][53 + (x - 53) % 14];
+        for (int y = 8 * s; y < 28 * s; y++)
+            for (int x = 53 * s; x < 119 * s; x++)
+                plaque[y][x] = plaque[y][53 * s + (x - 53 * s) % (14 * s)];
     }
-    // The caption goes into the texture like the baked ones: two pixels wide and blurred, so that the phone's
-    // upscaling leaves it as dark and smooth as "Zavřít" below it.
-    GUIFont *font = assets->pFontArrus.get();
-    RgbaImage text = RgbaImage::solid(Color(), plaque.width(), plaque.height() + font->GetHeight() + 2);
-    int textX = std::max(0, (plaque.width() - font->GetLineWidth(_takeAllButton->label) - 1) / 2);
+    // The caption in the typeface of the baked ones (create.fnt): a one pixel stroke with the same light
+    // anti-aliasing halo as "Zavřít" below it, drawn in logical pixels and stretched over the texture.
+    GUIFont *font = assets->pFontCreate.get();
+    int logicalW = plaque.width() / s, logicalH = plaque.height() / s;
+    RgbaImage text = RgbaImage::solid(Color(), logicalW, logicalH + font->GetHeight() + 2);
+    int textX = std::max(0, (logicalW - font->GetLineWidth(_takeAllButton->label)) / 2);
     font->DrawTextLineToBuff(colorTable.White, Color(), &text[10][textX], _takeAllButton->label, text.width());
-    for (int y = 0; y < text.height(); y++)
-        for (int x = text.width() - 1; x > 0; x--)
-            if (text[y][x - 1].a)
-                text[y][x] = text[y][x - 1];
-    static const int kernel[3][3] = {{1, 2, 1}, {2, 4, 2}, {1, 2, 1}};
-    for (int y = 1; y < plaque.height() - 1; y++) {
-        for (int x = 1; x < plaque.width() - 1; x++) {
-            int coverage = 16;  // The stroke itself is black, its surroundings only darken to half the stroke's weight.
-            if (!text[y][x].a) {
-                coverage = 0;
-                for (int ky = -1; ky <= 1; ky++)
-                    for (int kx = -1; kx <= 1; kx++)
-                        if (text[y + ky][x + kx].a)
-                            coverage += kernel[ky + 1][kx + 1];
-                coverage /= 2;
+    for (int y = s; y < plaque.height() - s; y++) {
+        for (int x = s; x < plaque.width() - s; x++) {
+            int lx = x / s, ly = y / s;
+            int coverage = 0;  // Of 16: the stroke is black, its four neighbours a quarter.
+            if (text[ly][lx].a) {
+                coverage = 16;
+            } else {
+                for (auto [dx, dy] : {std::pair(-1, 0), std::pair(1, 0), std::pair(0, -1), std::pair(0, 1)})
+                    if (text[ly + dy][lx + dx].a)
+                        coverage = std::max(coverage, 4);
             }
+            if (!coverage)
+                continue;
             Color &pixel = plaque[y][x];
             pixel.r = pixel.r * (16 - coverage) / 16;
             pixel.g = pixel.g * (16 - coverage) / 16;
             pixel.b = pixel.b * (16 - coverage) / 16;
         }
     }
-    _takeAllTexture = GraphicsImage::Create(std::move(plaque));
+    _takeAllTexture = GraphicsImage::Create(std::move(plaque), s);
     current_screen_type = SCREEN_CHEST;
     gameTimer->setPaused(true);
 }

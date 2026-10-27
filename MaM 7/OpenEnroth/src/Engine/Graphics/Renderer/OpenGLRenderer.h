@@ -122,6 +122,10 @@ class OpenGLRenderer : public BaseRenderer {
     void _set_ortho_modelview();
 
     Recti clipRect;
+    // Ours: the framebuffer is outputRender (the game's 640x480 logical space) times _renderScale.
+    int _renderScale = 1;
+    int renderScale() override { return _renderScale; }
+    Sizei framebufferSize() const { return {outputRender.w * _renderScale, outputRender.h * _renderScale}; }
 
     int GL_lastboundtex = 0;
 

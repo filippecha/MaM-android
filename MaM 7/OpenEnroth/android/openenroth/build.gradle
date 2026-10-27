@@ -100,7 +100,7 @@ android {
         sourceSets.main.assets.srcDirs += project.property('GAME_DATA_DIR')
     }
     aaptOptions {
-        noCompress 'lod', 'LOD', 'vid', 'VID', 'snd', 'SND', 'hwl', 'HWL', 'mp3', 'MP3'
+        noCompress 'lod', 'LOD', 'vid', 'VID', 'snd', 'SND', 'hwl', 'HWL', 'mp3', 'MP3', 'png', 'PNG', 'jpg', 'JPG'
     }
     namespace 'org.openenroth.game'
     applicationVariants.all { variant ->

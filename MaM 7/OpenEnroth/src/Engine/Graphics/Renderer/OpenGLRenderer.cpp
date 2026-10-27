@@ -208,11 +208,12 @@ OpenGLRenderer::~OpenGLRenderer() {
 }
 
 RgbaImage OpenGLRenderer::ReadScreenPixels() {
-    RgbaImage result = RgbaImage::uninitialized(outputRender.w, outputRender.h);
+    Sizei fb = framebufferSize();
+    RgbaImage result = RgbaImage::uninitialized(fb.w, fb.h);
     if (outputRender != outputPresent) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     }
-    glReadPixels(0, 0, outputRender.w, outputRender.h, GL_RGBA, GL_UNSIGNED_BYTE, result.pixels().data());
+    glReadPixels(0, 0, fb.w, fb.h, GL_RGBA, GL_UNSIGNED_BYTE, result.pixels().data());
     if (outputRender != outputPresent) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     }
@@ -568,6 +569,7 @@ void OpenGLRenderer::BlendTextures(int x, int y, GraphicsImage *imgin, GraphicsI
         const RgbaImage &maskImage = imgblend->rgba();
 
         RgbaImage dstImage = RgbaImage::solid(Color(), imgin->size());
+        int inScale = imgin->scale(), maskScale = imgblend->scale();  // HD UI images are bigger than they are drawn.
 
         Color c = maskImage.pixels()[2700];  // guess at brightest pixel
         unsigned int rmax = c.r;
@@ -589,8 +591,8 @@ void OpenGLRenderer::BlendTextures(int x, int y, GraphicsImage *imgin, GraphicsI
                 // should go blue -> black -> blue reverse
                 // patchy -> solid -> patchy
 
-                if (itemImage[ydraw][xdraw] != Color()) {  // check orig item not got blakc pixel
-                    Color pixcol = maskImage[ydraw % maskImage.height()][xdraw % maskImage.width()];
+                if (itemImage[ydraw * inScale][xdraw * inScale] != Color()) {  // check orig item not got blakc pixel
+                    Color pixcol = maskImage[(ydraw * maskScale) % maskImage.height()][(xdraw * maskScale) % maskImage.width()];
 
                     unsigned int rcur = pixcol.r;
                     unsigned int gcur = pixcol.g;
@@ -785,7 +787,7 @@ RgbaImage OpenGLRenderer::MakeViewportScreenshot(const int width, const int heig
     if (uCurrentlyLoadedLevelType != LEVEL_NULL) {
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                pPixels[y][x] = sPixels[outputRender.h - (y + 1) * interval_y - pViewport.y][x * interval_x + pViewport.x];
+                pPixels[y][x] = sPixels[(outputRender.h - (y + 1) * interval_y - pViewport.y) * _renderScale][(x * interval_x + pViewport.x) * _renderScale];
             }
         }
     }
@@ -952,11 +954,12 @@ void OpenGLRenderer::_set_3d_modelview_matrix() {
 
 // TODO(pskelton): to camera?
 void OpenGLRenderer::_set_ortho_projection(bool gameviewport) {
+    int k = _renderScale;
     if (!gameviewport) {  // project over entire window
-        glViewport(0, 0, outputRender.w, outputRender.h);
+        glViewport(0, 0, outputRender.w * k, outputRender.h * k);
         projmat = glm::ortho(float(0), float(outputRender.w), float(outputRender.h), float(0), float(-1), float(1));
     } else {  // project to game viewport
-        glViewport(pViewport.x, outputRender.h - (pViewport.y + pViewport.h - 1) - 1, pViewport.w, pViewport.h);
+        glViewport(pViewport.x * k, (outputRender.h - (pViewport.y + pViewport.h - 1) - 1) * k, pViewport.w * k, pViewport.h * k);
         projmat = glm::ortho(float(pViewport.x), float(pViewport.x + pViewport.w - 1), float(pViewport.y + pViewport.h - 1), float(pViewport.y), float(1), float(-1));
     }
 }
@@ -1937,7 +1940,8 @@ void OpenGLRenderer::SetBillboardBlendOptions(RenderBillboardD3D::OpacityType a1
 
 void OpenGLRenderer::SetUIClipRect(const Recti &rect) {
     this->clipRect = rect;
-    glScissor(rect.x, outputRender.h - rect.y - rect.h, rect.w, rect.h);  // invert glscissor co-ords 0,0 is BL
+    int k = _renderScale;
+    glScissor(rect.x * k, (outputRender.h - rect.y - rect.h) * k, rect.w * k, rect.h * k);  // invert glscissor co-ords 0,0 is BL
 }
 
 void OpenGLRenderer::ResetUIClipRect() {
@@ -2203,9 +2207,10 @@ void OpenGLRenderer::flushAndScale() {
         rect.w = w;
         rect.h = h;
 
-        GLenum filter = config->graphics.RenderFilter.value() == 1 ? GL_LINEAR : GL_NEAREST;
+        GLenum filter = config->graphics.RenderFilter.value() == 1 || _renderScale > 1 ? GL_LINEAR : GL_NEAREST;
+        Sizei fb = framebufferSize();
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
-        glBlitFramebuffer(0, 0, outputRender.w, outputRender.h, rect.x, rect.y, rect.w + rect.x, rect.h + rect.y, GL_COLOR_BUFFER_BIT, filter);
+        glBlitFramebuffer(0, 0, fb.w, fb.h, rect.x, rect.y, rect.w + rect.x, rect.h + rect.y, GL_COLOR_BUFFER_BIT, filter);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     }
 }
@@ -2213,7 +2218,7 @@ void OpenGLRenderer::flushAndScale() {
 void OpenGLRenderer::swapBuffers() {
     if (outputRender != outputPresent) {
         glEnable(GL_SCISSOR_TEST);
-        glViewport(0, 0, outputRender.w, outputRender.h);
+        glViewport(0, 0, framebufferSize().w, framebufferSize().h);
     }
 
     openGLContext->swapBuffers();
@@ -3431,6 +3436,16 @@ void OpenGLRenderer::_initWaterTiles() {
 bool OpenGLRenderer::Reinitialize(bool firstInit) {
     BaseRenderer::Reinitialize(firstInit);
 
+    _renderScale = config->graphics.RenderScale.value();
+    if (_renderScale == 0) {
+        // Enough framebuffer pixels for every pixel of the window, the picture is then shrunk to it, not stretched.
+        float ratio = std::min(float(outputPresent.w) / outputRender.w, float(outputPresent.h) / outputRender.h);
+        _renderScale = std::clamp(static_cast<int>(std::ceil(ratio - 0.01f)), 1, 4);
+    }
+    if (outputRender == outputPresent)
+        _renderScale = 1;  // Drawing straight into the window, no framebuffer to scale.
+    Sizei fb = framebufferSize();
+
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);       // Black Background
     glClearDepthf(1.0f);
 
@@ -3453,7 +3468,7 @@ bool OpenGLRenderer::Reinitialize(bool firstInit) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, outputRender.w, outputRender.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fb.w, fb.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     glBindTexture(GL_TEXTURE_2D, framebufferTextures[1]);
@@ -3461,11 +3476,11 @@ bool OpenGLRenderer::Reinitialize(bool firstInit) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, outputRender.w, outputRender.h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, fb.w, fb.h, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    glViewport(0, 0, outputRender.w, outputRender.h);
-    glScissor(0, 0, outputRender.w, outputRender.h);
+    glViewport(0, 0, fb.w, fb.h);
+    glScissor(0, 0, fb.w, fb.h);
     glEnable(GL_SCISSOR_TEST);
 
     this->clipRect = Recti(Pointi(0, 0), outputRender);
