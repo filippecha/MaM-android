@@ -86,7 +86,7 @@ int spriteScale() {
     return scale;
 }
 
-std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate) {
+std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate, int *scaleOut) {
     if (!hdEnabled() || originalWidth <= 0 || originalHeight <= 0)
         return std::nullopt;
     int scale = engine->config->graphics.HdTextures.value();
@@ -107,6 +107,8 @@ std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, 
         image = areaResize(image, originalWidth * scale, originalHeight * scale);
 
     MM_INFO("HD texture {} {}x{}", name, image.width(), image.height());
+    if (scaleOut)
+        *scaleOut = image.width() / originalWidth;
     if (desaturate) {
         float xs = engine->config->graphics.Saturation.value();
         float xv = engine->config->graphics.Lightness.value();
@@ -138,7 +140,9 @@ void applyHdIcon(std::string_view name, RgbaImage *image, int *scale) {
     for (int y = 0; y < hd->height(); y++) {
         for (int x = 0; x < hd->width(); x++) {
             Color &pixel = (*hd)[y][x];
-            uint8_t alpha = (*image)[y / factor][x / factor].a;
+            // The original's transparency, and the HD file's own where it has one (the buff icons at the portraits
+            // without their background square and shadow, tools/hd-upscale/isg_alpha.py).
+            uint8_t alpha = std::min((*image)[y / factor][x / factor].a, pixel.a);
             pixel = alpha == 0 ? Color() : Color(pixel.r, pixel.g, pixel.b, alpha);
         }
     }

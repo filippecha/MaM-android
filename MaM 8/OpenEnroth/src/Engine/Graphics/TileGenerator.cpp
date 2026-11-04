@@ -1,6 +1,8 @@
 #include "TileGenerator.h"
 
 #include <cassert>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "Engine/AssetsManager.h"
@@ -9,6 +11,7 @@
 #include "Engine/Data/TileEnumFunctions.h"
 #include "Engine/Tables/TileTable.h"
 #include "Engine/Graphics/Image.h"
+#include "Engine/Graphics/HdTextures.h"
 #include "Library/Image/ImageFunctions.h"
 #include "Library/Image/Png.h"
 #include "Library/LodFormats/LodFormats.h"
@@ -90,8 +93,12 @@ RgbaImageView TileGenerator::loadTile(Tileset tileset, TileVariant variant) {
         return *result;
 
     // Need to load directly from LOD, caching layer contains desaturated images.
-    LodImage image = lod::decodeImage(pBitmaps_LOD->read(pTileTable->tile(pTileTable->tileId(tileset, variant)).textureName));
-    return _tileByTilesetVariant.emplace(key, makeRgbaImage(image.image, image.palette)).first->second;
+    std::string textureName = pTileTable->tile(pTileTable->tileId(tileset, variant)).textureName;
+    LodImage image = lod::decodeImage(pBitmaps_LOD->read(textureName));
+    RgbaImage rgba = makeRgbaImage(image.image, image.palette);
+    if (std::optional<RgbaImage> hd = loadHdBitmap(textureName, rgba.width(), rgba.height(), false))
+        rgba = std::move(*hd);
+    return _tileByTilesetVariant.emplace(key, std::move(rgba)).first->second;
 }
 
 TileVariant TileGenerator::findSpanningVariant(Directions currentDirections, Directions targetDirections) const {

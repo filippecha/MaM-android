@@ -18,10 +18,12 @@ echo "build ok"
 printf "pcm.!default { type null }
 ctl.!default { type hw card 0 }
 " > ~/.asoundrc
-Xvfb :99 -screen 0 640x480x24 >/dev/null 2>&1 &
+Xvfb :99 -screen 0 ${OE_DEV_SCREEN:-640x480}x24 >/dev/null 2>&1 &
 sleep 2
 export DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 OPENENROTH_MM7_PATH=/game
 rm -rf /root/.openenroth
+# OE_DEV_INI="[window];width = 1280;height = 960" writes settings into a fresh openenroth.ini, ";" separates lines.
+if [ -n "${OE_DEV_INI:-}" ]; then mkdir -p /root/.openenroth && printf "%s\n" "$OE_DEV_INI" | tr ";" "\n" > /root/.openenroth/openenroth.ini; fi
 rm -f /out/shot-*.png
 if [ -n "${DEV_GDB:-}" ]; then
     # Backtraces into /out/gdb.log: of C++ exceptions for DEV_GDB=1, otherwise DEV_GDB is a breakpoint like "AudioPlayer.cpp:364".

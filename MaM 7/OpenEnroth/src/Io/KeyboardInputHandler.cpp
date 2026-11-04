@@ -220,8 +220,8 @@ void Io::KeyboardInputHandler::ProcessGameplayAction(InputAction action) {
                 _yellCount = 0;
                 cheatImmortal = !cheatImmortal;
                 MM_INFO("MaM 7 cheat: immortality {}", cheatImmortal ? "on" : "off");
-                engine->_statusBar->setEvent(cheatImmortal ? "Nesmrtelnost a neomezen\xe1 mana zapnuta"
-                                                           : "Nesmrtelnost a neomezen\xe1 mana vypnuta");
+                engine->_statusBar->setEvent(cheatImmortal ? "Nesmrtelnost, mana a pos\xedlen\xed zapnuty"
+                                                           : "Nesmrtelnost, mana a pos\xedlen\xed vypnuty");
             }
         }
         break;

@@ -26,12 +26,13 @@ def inpaint(rgb, mask):
 
 src, out = sys.argv[1:3]
 os.makedirs(out, exist_ok=True)
+mm8 = b'MMVIII' in open(src, 'rb').read(16)
 count = 0
 skipped = 0
 for key, (name, blob) in sorted(lod.entries(src).items()):
     if key.startswith(SKIP_PREFIX):
         continue
-    b = blob
+    b = blob[48:] if mm8 else blob  # MM8 entries start with a 64 byte name instead of 16.
     try:
         size, dsz, w, h = struct.unpack_from('<IIHH', b, 16)
         dec, = struct.unpack_from('<I', b, 40)
@@ -41,10 +42,13 @@ for key, (name, blob) in sorted(lod.entries(src).items()):
             pal = b[48 + dsz:48 + dsz + 768]
             if len(px) < w * h or len(pal) < 768:
                 raise ValueError('short image')
+            flags, = struct.unpack_from('<I', b, 44)
             idx = np.frombuffer(px[:w * h], dtype=np.uint8).reshape(h, w)
             palette = np.frombuffer(pal, dtype=np.uint8).reshape(256, 3)
             rgb = palette[idx]
-            mask = idx == 0
+            # Flag 512 makes palette index 0 transparent (as in ImageLoader.cpp), otherwise the teal colour key is.
+            # Index 0 is usually the black of text and shadows, it must stay.
+            mask = idx == 0 if flags & 512 else np.all(rgb == (0, 255, 255), axis=2)
         else:
             data_size, = struct.unpack_from('<I', b, 20)
             unpacked, = struct.unpack_from('<I', b, 40)

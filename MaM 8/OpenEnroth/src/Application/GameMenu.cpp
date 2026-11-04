@@ -30,6 +30,9 @@
 #include "GUI/UI/UISaveLoad.h"
 #include "GUI/UI/UIStatusBar.h"
 
+#include "Library/Logger/Logger.h"
+#include "Utility/String/Format.h"
+
 #include "Media/Audio/AudioPlayer.h"
 #include "Utility/GameVariant.h"
 #include "Utility/MapAccess.h"
@@ -132,8 +135,15 @@ void Menu::EventLoop() {
                 continue;
             case UIMSG_LoadGame:
                 if (saveLoadMenu()->hasSelectedSlot()) {
-                    loadGame(saveLoadMenu()->selectedSlot().fileName);
-                    uGameState = GAME_STATE_LOADING_GAME;
+                    // A save that cannot be read reports in the status bar instead of taking the game down.
+                    try {
+                        loadGame(saveLoadMenu()->selectedSlot().fileName);
+                        uGameState = GAME_STATE_LOADING_GAME;
+                    } catch (const std::exception &e) {
+                        MM_ERROR("loadGame({}): {}", saveLoadMenu()->selectedSlot().fileName, e.what());
+                        engine->_statusBar->setEvent(fmt::format("Pozici nelze naèíst: {}", e.what()));
+                        pAudioPlayer->playUISound(SOUND_error);
+                    }
                 }
                 continue;
             case UIMSG_SaveGame: {
@@ -149,7 +159,13 @@ void Menu::EventLoop() {
                     keyboardInputHandler->StartTextInput(TextInputType::Text, 19, pGUIWindow_CurrentMenu.get());
                     continue;
                 }
-                doSavegame(menu->selectedSlot().fileName, menu->selectedSlot().header.name);
+                try {
+                    doSavegame(menu->selectedSlot().fileName, menu->selectedSlot().header.name);
+                } catch (const std::exception &e) {
+                    MM_ERROR("doSavegame({}): {}", menu->selectedSlot().fileName, e.what());
+                    engine->_statusBar->setEvent(fmt::format("Hru nelze ulo" "it: {}", e.what()));
+                    pAudioPlayer->playUISound(SOUND_error);
+                }
                 continue;
             }
             case UIMSG_Game_OpenSaveGameDialog: {

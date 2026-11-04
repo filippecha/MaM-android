@@ -1343,6 +1343,8 @@ int Character::ReceiveSpecialAttackEffect(MonsterSpecialAttack attType, Actor *p
     if (engine->callObserver) {
         engine->callObserver->notify(CALL_SPECIAL_ATTACK, attType);
     }
+    if (cheatImmortal)
+        return 0;  // Ours: under the cheat no monster curses, breaks or steals anything.
 
     int statcheck;
     int statcheckbonus;

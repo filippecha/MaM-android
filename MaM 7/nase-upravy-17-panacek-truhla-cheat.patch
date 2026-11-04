@@ -1,0 +1,134 @@
+diff --git a/MaM 7/OpenEnroth/src/Engine/HitMap.h b/MaM 7/OpenEnroth/src/Engine/HitMap.h
+index ffb9524b..842cc55a 100644
+--- a/MaM 7/OpenEnroth/src/Engine/HitMap.h	
++++ b/MaM 7/OpenEnroth/src/Engine/HitMap.h	
+@@ -4,6 +4,7 @@
+ #include <utility>
+ #include <vector>
+ #include <algorithm>
++#include <cstdlib>
+ 
+ #include "Library/Geometry/Point.h"
+ #include "Library/Geometry/Rect.h"
+@@ -56,25 +57,29 @@ class HitMap {
+      *                                  or `defaultValue` if no such image exists.
+      */
+     T query(Pointi point, T defaultValue = {}) const {
+-        if (!_bounds.contains(point))
++        if (!Recti(_bounds.x - kSlack, _bounds.y - kSlack, _bounds.w + 2 * kSlack, _bounds.h + 2 * kSlack).contains(point))
+             return defaultValue;
+ 
+         // Iterate entries in reverse order (topmost first).
+-        for (auto it = _entries.rbegin(); it != _entries.rend(); ++it) {
+-            const Entry &entry = *it;
+-
+-            Pointi relativePos = point - entry.position;
+-            if (entry.image->rgba().geometry().contains(relativePos)) {
+-                Color color = entry.image->rgba()[relativePos];
+-                if (color.a > 0)
+-                    return entry.value;
+-            }
+-        }
++        for (auto it = _entries.rbegin(); it != _entries.rend(); ++it)
++            if (opaque(*it, point))
++                return it->value;
++
++        // Ours: a finger or a click just beside an item still takes it, the nearest item within a few pixels wins.
++        for (int r = 1; r <= kSlack; r++)
++            for (int dy = -r; dy <= r; dy++)
++                for (int dx = -r; dx <= r; dx++)
++                    if (std::max(std::abs(dx), std::abs(dy)) == r)
++                        for (auto it = _entries.rbegin(); it != _entries.rend(); ++it)
++                            if (opaque(*it, point + Pointi(dx, dy)))
++                                return it->value;
+ 
+         return defaultValue;
+     }
+ 
+  private:
++    static constexpr int kSlack = 4; // Logical pixels.
++
+     struct Entry {
+         Pointi position;
+         GraphicsImage *image = nullptr;
+@@ -83,6 +88,18 @@ class HitMap {
+         Entry(Pointi pos, GraphicsImage *img, T val) : position(pos), image(img), value(val) {}
+     };
+ 
++    // Ours: the point is in logical pixels, an HD texture has scale() texture pixels per logical one. Reading it
++    // unscaled tested only the top left third of every item on the paperdoll, it was hard to take anything off.
++    static bool opaque(const Entry &entry, Pointi point) {
++        Pointi relativePos = point - entry.position;
++        if (!Recti(Pointi(0, 0), entry.image->size()).contains(relativePos))
++            return false;
++        int s = entry.image->scale();
++        RgbaImage &rgba = entry.image->rgba();
++        Pointi pixel = relativePos * s + Pointi(s / 2, s / 2);
++        return rgba.geometry().contains(pixel) && rgba[pixel].a > 0;
++    }
++
+     std::vector<Entry> _entries;
+     Recti _bounds; // Bounding rectangle of all images.
+ };
+diff --git a/MaM 7/OpenEnroth/src/Engine/Party.cpp b/MaM 7/OpenEnroth/src/Engine/Party.cpp
+index 43f77258..d40ebbe4 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Party.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Party.cpp	
+@@ -652,6 +652,9 @@ void Party::updateCharactersAndHirelingsEmotions() {
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_WIZARD_EYE], 0);
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_SHIELD], 0);
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_STONE_SKIN], 15);
++        keepCheatBuff(pPartyBuffs[PARTY_BUFF_DETECT_LIFE], 0);
++        keepCheatBuff(pPartyBuffs[PARTY_BUFF_FEATHER_FALL], 0);
++        keepCheatBuff(pPartyBuffs[PARTY_BUFF_IMMOLATION], 10); // Burns only enemies under the cheat, see immolationAffectedActors.
+         for (PartyBuff resist : {PARTY_BUFF_RESIST_FIRE, PARTY_BUFF_RESIST_AIR, PARTY_BUFF_RESIST_WATER, PARTY_BUFF_RESIST_EARTH,
+                                  PARTY_BUFF_RESIST_MIND, PARTY_BUFF_RESIST_BODY})
+             keepCheatBuff(pPartyBuffs[resist], 40);
+@@ -1029,6 +1032,9 @@ size_t Party::immolationAffectedActors(int *affected, size_t affectedArrSize, si
+                 pActors[i].aiState != Removed &&
+                 pActors[i].aiState != Disabled &&
+                 pActors[i].aiState != Summoned) {
++                // Ours: the cheat keeps the aura on all the time, peasants and guards in towns stay out of it.
++                if (cheatImmortal && pActors[i].GetActorsRelation(nullptr) == HOSTILITY_FRIENDLY && pActors[i].ActorFriend())
++                    continue;
+                 affected[affectedCount] = i;
+ 
+                 affectedCount++;
+diff --git a/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp b/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp
+index 5178e60e..d79706a9 100644
+--- a/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp	
++++ b/MaM 7/OpenEnroth/src/GUI/UI/UIChest.cpp	
+@@ -2,6 +2,7 @@
+ 
+ #include <algorithm>
+ #include <utility>
++#include <vector>
+ 
+ #include "Engine/Graphics/Renderer/Renderer.h"
+ #include "Engine/Graphics/Image.h"
+@@ -60,6 +61,25 @@ GUIWindow_Chest::GUIWindow_Chest(int chestId) : GUIWindow(WINDOW_Chest, {0, 0},
+             pixel.b = pixel.b * (16 - coverage) / 16;
+         }
+     }
++    // Ours: between this button (400..435) and the exit one (445..480) ten rows showed the dark bar of the main UI
++    // behind them. The texture grows by these rows, filled with the plain stone (or ice) of the plaque around its
++    // button: the bottom rows 31..34 and the top rows 0..4, both mirrored so that the joins stay smooth.
++    if (plaque.width() == 169 * s && plaque.height() == 35 * s) {
++        std::vector<int> fill;
++        for (int y = 35 * s - 1; y >= 31 * s; y--)
++            fill.push_back(y);
++        for (int y = 31 * s; y < 32 * s; y++)
++            fill.push_back(y);
++        for (int y = 5 * s - 1; y >= 0; y--)
++            fill.push_back(y);
++        RgbaImage tall = RgbaImage::uninitialized(plaque.width(), 35 * s + static_cast<int>(fill.size()));
++        for (int y = 0; y < tall.height(); y++) {
++            int from = y < 35 * s ? y : fill[y - 35 * s];
++            for (int x = 0; x < plaque.width(); x++)
++                tall[y][x] = plaque[from][x];
++        }
++        plaque = std::move(tall);
++    }
+     _takeAllTexture = GraphicsImage::Create(std::move(plaque), s);
+     current_screen_type = SCREEN_CHEST;
+     gameTimer->setPaused(true);

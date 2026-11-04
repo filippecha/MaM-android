@@ -618,11 +618,24 @@ void Party::resetCharacterEmotions() {
     }
 }
 
+/**
+ * Ours: keeps a buff of the immortality cheat running for the next game hour. A stronger buff cast by the party stays.
+ *
+ * @param buff                      Buff to keep.
+ * @param power                     Power of the cheat buff, the grandmaster power at skill 10 (0 for buffs without one).
+ */
+static void keepCheatBuff(SpellBuff &buff, int power) {
+    if (buff.Active() && buff.power > power)
+        return;
+    buff.expireTime = Time();
+    buff.Apply(pParty->GetPlayingTime() + Duration::fromHours(1), MASTERY_GRANDMASTER, power, 0, -1);
+}
+
 void Party::updateCharactersAndHirelingsEmotions() {
     if (pParty->cNonHireFollowers < 0) {
         pParty->CountHirelings();
     }
-    // The immortality cheat: everybody healthy and full of spell points, every frame.
+    // The immortality cheat: everybody healthy and full of spell points, with the grandmaster buffs below, every frame.
     if (cheatImmortal) {
         for (Character &player : this->pCharacters) {
             for (Condition condition : allConditions())
@@ -630,6 +643,28 @@ void Party::updateCharactersAndHirelingsEmotions() {
                     player.conditions.reset(condition);
             player.health = player.GetMaxHealth();
             player.mana = player.GetMaxMana();
+            keepCheatBuff(player.pCharacterBuffs[CHARACTER_BUFF_BLESS], 15);
+            keepCheatBuff(player.pCharacterBuffs[CHARACTER_BUFF_FATE], 60);
+            keepCheatBuff(player.pCharacterBuffs[CHARACTER_BUFF_PRESERVATION], 0);
+        }
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_HEROISM], 15);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_DAY_OF_GODS], 60);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_TORCHLIGHT], 4);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_WIZARD_EYE], 0);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_SHIELD], 0);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_STONE_SKIN], 15);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_PROTECTION_FROM_MAGIC], 10); // Ten blocked spells, refilled every frame.
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_DETECT_LIFE], 0);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_FEATHER_FALL], 0);
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_HASTE], 0);
+        pPartyBuffs[PARTY_BUFF_HASTE].isGM = true; // Marks the cheat's haste, it wears off without weakness.
+        keepCheatBuff(pPartyBuffs[PARTY_BUFF_IMMOLATION], 10); // Burns only enemies under the cheat, see immolationAffectedActors.
+        for (PartyBuff resist : {PARTY_BUFF_RESIST_FIRE, PARTY_BUFF_RESIST_AIR, PARTY_BUFF_RESIST_WATER, PARTY_BUFF_RESIST_EARTH,
+                                 PARTY_BUFF_RESIST_MIND, PARTY_BUFF_RESIST_BODY})
+            keepCheatBuff(pPartyBuffs[resist], 40);
+        for (PartyBuff travel : {PARTY_BUFF_FLY, PARTY_BUFF_WATER_WALK}) {
+            keepCheatBuff(pPartyBuffs[travel], 0);
+            pPartyBuffs[travel].isGM = true; // Without a caster, like the buffs of hired NPCs, so no mana drain.
         }
     }
 
@@ -1001,6 +1036,9 @@ size_t Party::immolationAffectedActors(int *affected, size_t affectedArrSize, si
                 pActors[i].aiState != Removed &&
                 pActors[i].aiState != Disabled &&
                 pActors[i].aiState != Summoned) {
+                // Ours: the cheat keeps the aura on all the time, peasants and guards in towns stay out of it.
+                if (cheatImmortal && pActors[i].GetActorsRelation(nullptr) == HOSTILITY_FRIENDLY && pActors[i].ActorFriend())
+                    continue;
                 affected[affectedCount] = i;
 
                 affectedCount++;

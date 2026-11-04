@@ -309,6 +309,16 @@ G7) Cheat: nesmrtelnost a neomezená mana
   nerozbije. Jen v paměti, nuluj při loadGame,
   saveNewGame a Party::Reset. Pozor: Y je zároveň klávesa „Ano", při nulování počítadla porovnávej
   klávesy, ne akce. Držení klávesy (opakování) se nepočítá, počítej jen isKeyPressedThisFrame.
+- Zapnutý cheat drží i kouzla: Požehnání (CHARACTER_BUFF_BLESS, síla 15) a Osud
+  (CHARACTER_BUFF_FATE, 60) na každé postavě, Hrdinství (PARTY_BUFF_HEROISM, 15) a Den bohů
+  (PARTY_BUFF_DAY_OF_GODS, 60), Pochodeň (PARTY_BUFF_TORCHLIGHT, 4) a Čarodějovo oko
+  (PARTY_BUFF_WIZARD_EYE, 0) na družině, tj. velmistr s dovedností 10. Oko na velmistra ukáže
+  na minimapě i velké mapě nestvůry, předměty i modré klikací stěny. Dále Štít (PARTY_BUFF_SHIELD, 0),
+  Kamenná kůže (PARTY_BUFF_STONE_SKIN, 15), všech šest odolností (PARTY_BUFF_RESIST_*, 40 = mistrovství 4
+  × dovednost 10), Létání a Chůze po vodě (PARTY_BUFF_FLY, PARTY_BUFF_WATER_WALK s isGM = true,
+  jako u najatých NPC, bez sesilatele by se jinak brala mana postavě -1). Každý snímek je
+  prodluž na hodinu herního času (SpellBuff::Apply s MASTERY_GRANDMASTER, caster -1), silnější
+  kouzlo seslané družinou nepřepisuj. Hláška: „Nesmrtelnost, mana a posílení zapnuty/vypnuty".
 
 G8) Sdílená identifikace předmětů a nestvůr
 - Dovednosti SKILL_ITEM_ID a SKILL_MONSTER_ID platí pro celou družinu, v dovednostech ale zůstávají
@@ -344,18 +354,79 @@ G10) HD grafika (jedna verze, bez přepínače)
   přes stb_image), zkontroluje násobek velikosti, podle graphics.hd_textures (0, 2, 4, -1 = podle paměti)
   zmenší plošným filtrem, u Bitmaps_LOD_Loader aplikuje odbarvení jako createLoadedPalette. Volej na
   konci Bitmaps_LOD_Loader::Load a v TileGenerator::loadTile. Sada musí být úplná, smíchané 128/512 px
-  dlaždice si v GL texture arrays prohodí vrstvy.
-- UI: obrázky z icons.lod zvětši 4× (PAD_MODE=reflect) do hd/icons/<jméno>.jpg. V enginu applyHdIcon
+  dlaždice si v GL texture arrays prohodí vrstvy. Souřadnice textur stěn jsou v datech v pixelech původní
+  textury: loader HD bitmapy si uloží scale, GraphicsImage vrací logickou velikost, renderer nahrává
+  rgba() (skutečné pixely), BLVFace dostane texscale (zakóduj ho do mapy unit/layer v bitech 16+) a do
+  atributů vrcholů bity 20–22, shadery glbspshader/gloutbuild dělí UV a tok vody logickou velikostí
+  (texsize / texscale). Bez toho jsou vnitřní mapy 4× zvětšené. pack.py srovnej průměr kanálů
+  s originálem, upscaler tmavne.
+- UI: obrázky z icons.lod zvětši 4× (PAD_MODE=reflect) do hd/icons/<jméno>.jpg; průhlednost při
+  extrakci jako engine (index 0 jen s příznakem 512, jinak tyrkys), index 0 je černá písma. V enginu applyHdIcon
   na konci loaderů ColorKey, Alpha a PCX: barvy z HD zmenšené plošným filtrem přesně na render_scale,
   alfa z původního obrázku, loader si uloží scale a GraphicsImage vrací width()/height() logické
-  (textura / scale). Minimapy (getImage_Solid) nenahrazuj, kód je čte po pixelech. Kód, který čte
-  pixely (BlendTextures), násob scale.
+  (textura / scale). HD dostanou i neprůhledné obrázky (getImage_Solid, Image16bit_LOD_Loader:
+  obrázky kouzel, pozadí oken), jen minimapy ne (getImage_Solid(jméno, false)), kód je čte po
+  pixelech. Kód, který čte pixely (BlendTextures), násob scale.
+- Okraje 2D obrázků: průhledné texely jsou černé a lineární filtr zvětšeného obrázku z nich udělá
+  tmavý obrys (čáry v knize kouzel). V GraphicsImage::renderId u nepaletových obrázků nahraj kopii,
+  kde průhledné texely u okraje (dva texely hluboko) dostanou průměrnou barvu neprůhledných sousedů
+  a alfa zůstane 0, sprity s paletovými indexy nech (ImageLoader::paletted()). V DrawTwodVerts
+  nastav GL_CLAMP_TO_EDGE, s GL_REPEAT se do okraje míchá protější okraj obrázku.
+- Čáry 2D vrstvy (mapa podzemí v minimapě a knize map): GL_LINES mají vždy jeden pixel
+  framebufferu, při render_scale > 1 jsou tenké a bledé. EndLines2D je převede na pásky
+  (GL_TRIANGLES) široké jeden logický pixel, posunuté o +0,5 na střed pixelu.
 - Sprity a písmo: Scale2x/Scale3x na paletových indexech v Sprites_LOD_Loader a v GUIFont::CreateFontTex
   (atlas zůstane logický, textura scale× větší), graphics.sprite_scale 0 = podle render_scale, na
   Androidu nejvýš 2. AI sprity nedělej: 9192 z 9221 snímků má v tabulce jinou paletu než sprite
   (barevné varianty nestvůr) a shader přes paletu svítí, barevný obrázek to zničí.
 
-G11) Další úpravy, které už máme a jsou popsané v README.md projektu
+G11) Čarodějovo oko na velké mapě
+- Když je aktivní Čarodějovo oko (wizardEyeActive, najatý kartograf nebo debug.wizard_eye, stejně
+  jako v GameUI_DrawMinimap), DrawBook_Map_sub v MapBook.cpp nakreslí před šipkou družiny značky
+  jako minimapa, ale po celé mapě a jen v prozkoumaných částech: nestvůry (ACTOR_HOSTILE červeně),
+  vesničany, mrtvoly (aiState Dead), od experta předměty na zemi (pSpriteObjects bez
+  OBJECT_DESC_UNPICKABLE), od mistra uvnitř modře obrysy klikacích stěn s událostí. Nestvůry ber
+  všechny kromě Removed a Disabled, ne jen ACTOR_NEARBY jako minimapa. Prozkoumané: venku
+  IsMapCellPartiallyRevealed(floor((x + 22528) / 512), floor((22528 - y) / 512)), uvnitř sektor
+  (actor.sectorId, uSectorID), jehož podlaha nebo stěna má FACE_SeenByParty. Značky 3×3 px,
+  nestvůry při největším přiblížení 5×5.
+
+G12) Svitek s díly golema
+- Kupní smlouva z úkolu na povýšení na čaroděje (ITEM_MESSAGE_BILL_OF_SALE 728) končí pěti řádky,
+  kam byly díly golema doručeny: Mohylové údolí (trup 639), Tatalie (pravá ruka 644), Avlee (levá
+  ruka 645), Deyja (levá a pravá noha 642, 643), Brakada (hlava 641 a „abnormální“ hlava 640).
+  Přiřazení je ověřené v datech (truhly v out11/13/14/05/06.ddm, questbity 66–72 zapsané golemem
+  na hradě v global.evt: 66 trup, 67 levá noha, 68 pravá noha, 69 levá ruka, 70 pravá ruka,
+  71 hlava, 72 abnormální hlava).
+- GUIWindow_MessageScroll::Update v UIMessageScroll.cpp obarví posledních pět neprázdných řádků:
+  zeleně, když družina má všechny díly řádku (v inventáři kterékoli postavy, v ruce nebo už
+  vestavěné, tj. nastavený questbit), žlutě při jednom ze dvou. Golem potřebuje jen jednu hlavu,
+  proto je řádek Brakady zelený, jakmile je některá hlava vestavěná. Barvy tagy colorTable.Green
+  a Yellow, výšku textu počítej z obarveného textu.
+
+G13) Drobné opravy
+- GraphicsImage::scale() texturu nejdřív načte (initialize()), jinak vrací 1 a kopie tlačítka
+  „Vzít vše" z HD textury nenačteného tlačítka Zavřít vyjde render_scale× větší a tlačítka zakryje.
+- initializeQuests: text „0" (nepoužité questbity 271–512 v quests.txt) nech prázdný, jinak
+  kniha úkolů ukáže úkol „0" (po dodání golema na hrad, i v originále).
+- Cheat nesmrtelnosti: Character::ReceiveSpecialAttackEffect pod cheatem hned vrátí 0 (nestvůry
+  nelámou, neproklínají, nekradou), nepovedené Očarování předmětu pod cheatem předmět nerozbije.
+
+- HitMap (předměty na panáčkovi): bod kliknutí je logický, HD textura má scale() pixelů na logický;
+  přepočítej ho (relativePos * s), jinak se trefí jen levá horní třetina předmětu. Klik do 4 bodů
+  vedle předmětu vezme nejbližší (prst).
+- Truhla: kopie „Vzít vše" o 10 řádků vyšší (kámen/led z destičky, zrcadlené řádky 31..34 a 0..4),
+  jinak mezi ní a „Zavřít" prosvítá tmavý pruh.
+- Cheat drží i Zjisti život, Pád pírka a Obětování (Immolation, síla 10); pod cheatem aura pálí jen
+  nepřátele (immolationAffectedActors vynechá přátelské).
+- Ikony isg-01..04 u portrétů: PNG s alfou kolem předmětu a jeho stínu (tools/hd-upscale/isg_alpha.py),
+  applyHdIcon bere min(alfa originálu, alfa HD) – jinak světlý čtverec pozadí.
+- Anglické texty v Localization::initialize (Obětování, krádež, speciální útoky…) česky v cp1250.
+- Cheat drží i Ochranu před magií (síla 10), Ochranu (Preservation) na postavách a Zrychlení (isGM = cheatové, po vypršení bez slabosti).
+- Nástěnné pochodně torch05-07 mají v ddeclist.bin poloměr kolize 100 (torch01-03 mají 8) a ucpou průchod vedle
+  sebe (Velechrám Měsíce, mezera u odsunutého bloku). Po načtení tabulky dekorací jim dej poloměr 8.
+
+G14) Další úpravy, které už máme a jsou popsané v README.md projektu
 - Družina na obřích schodech Titánské pevnosti (nepropadá pod stupně), karta Úspěchy vypisuje
   hospody bez výhry v Arcomage, rozšíření „Stín nad Krajem" (vlastní kraj.lod). Postupuj podle
   README a patchů nase-upravy-*.patch ve veřejném repozitáři MaM-android (složka MaM 7).

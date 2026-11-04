@@ -2,9 +2,11 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <utility>
 
 #include "Engine/Engine.h"
 
@@ -701,6 +703,12 @@ void Engine::MM7_Initialize() {
 
     pDecorationTable = new DecorationTable;
     deserialize(engine->resources()->eventsData("ddeclist.bin"), pDecorationTable);
+    // Ours: the wall torches torch05-07 have a collision radius of 100 in ddeclist.bin (the standing torch01-03 have 8), so
+    // a torch hanging on a wall blocked the way two meters into the room, e.g. the gap next to the opened block in
+    // the Grand Temple of the Moon. They get the radius of the other torches.
+    for (std::string_view torch : {"torch05", "torch06", "torch07"})
+        if (DecorationId id = pDecorationTable->decorationId(torch); id != DECORATION_NULL)
+            pDecorationTable->decorations[std::to_underlying(id)].uRadius = 8;
 
     pObjectList = new ObjectList;
     deserialize(engine->resources()->eventsData("dobjlist.bin"), pObjectList);
@@ -1167,8 +1175,9 @@ void _494035_timed_effects__water_walking_damage__etc(Duration dt) {
     }
 
     if (pParty->pPartyBuffs[PARTY_BUFF_HASTE].Expired()) {
-        for (Character &character : pParty->pCharacters)
-            character.SetCondition(CONDITION_WEAK, 0);
+        if (!pParty->pPartyBuffs[PARTY_BUFF_HASTE].isGM) // Ours: the haste of the cheat leaves no weakness.
+            for (Character &character : pParty->pCharacters)
+                character.SetCondition(CONDITION_WEAK, 0);
         pParty->pPartyBuffs[PARTY_BUFF_HASTE].Reset();
     }
 

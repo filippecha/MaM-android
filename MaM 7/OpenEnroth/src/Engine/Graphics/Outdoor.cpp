@@ -497,7 +497,7 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
     std::string_view minimap_filename = filename.substr(0, filename.length() - 4);
     if (viewparams->location_minimap)
         viewparams->location_minimap->release();
-    viewparams->location_minimap = assets->getImage_Solid(minimap_filename);
+    viewparams->location_minimap = assets->getImage_Solid(minimap_filename, false);  // Read pixel by pixel.
 
     std::string odm_filename = std::string(filename);
     odm_filename.replace(odm_filename.length() - 4, 4, ".odm");

@@ -35,6 +35,10 @@ void main() {
     vec2 texuvmod = vec2(0.0);
     vec2 deltas = vec2(0.0);
     ivec3 texsize = textureSize(textureArray0,0);
+    // HD textures hold more pixels than the UVs of the game data assume, bits 20-22 of the attributes carry the ratio.
+    int texscale = (vsAttrib >> 20) & 7;
+    if (texscale < 1) texscale = 1;
+    vec2 ltex = vec2(texsize.xy) / float(texscale);
 
     // texture flow mods
     if (abs(vsNorm.z) >= 0.9) {
@@ -58,14 +62,14 @@ void main() {
         float lavaradians = lavaperiod * radians(360.0) / 8000.0;
         float curpos = sin(lavaradians);
         deltas.x = 0.0;
-        deltas.y = float(texsize.y) * curpos;
+        deltas.y = ltex.y * curpos;
     } else {
-        deltas.x = texuvmod.x * mod(float(flowtimer), float(texsize.x));
-        deltas.y = texuvmod.y * mod(float(flowtimer), float(texsize.y));
+        deltas.x = texuvmod.x * mod(float(flowtimer), ltex.x);
+        deltas.y = texuvmod.y * mod(float(flowtimer), ltex.y);
     }
 
-    texcoords.x = (deltas.x + texuv.x) / float(texsize.x);
-    texcoords.y = (deltas.y + texuv.y) / float(texsize.y);
+    texcoords.x = (deltas.x + texuv.x) / ltex.x;
+    texcoords.y = (deltas.y + texuv.y) / ltex.y;
     fragcol = texture(textureArray0, vec3(texcoords.x,texcoords.y,olayer));
 
     vec4 toplayer = texture(textureArray0, vec3(texcoords.x,texcoords.y,0));

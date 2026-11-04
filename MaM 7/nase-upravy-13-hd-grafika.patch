@@ -11,6 +11,95 @@ index 930bcb64..ba92f6f0 100644
      }
      namespace 'org.openenroth.game'
      applicationVariants.all { variant ->
+diff --git a/MaM 7/OpenEnroth/resources/shaders/glbspshader.frag b/MaM 7/OpenEnroth/resources/shaders/glbspshader.frag
+index 5da7d710..94ffa960 100644
+--- a/MaM 7/OpenEnroth/resources/shaders/glbspshader.frag	
++++ b/MaM 7/OpenEnroth/resources/shaders/glbspshader.frag	
+@@ -32,6 +32,10 @@ void main() {
+     vec2 texuvmod = vec2(0.0);
+     vec2 deltas = vec2(0.0);
+     ivec3 texsize = textureSize(textureArray0,0);
++    // HD textures hold more pixels than the UVs of the game data assume, bits 20-22 of the attributes carry the ratio.
++    int texscale = (vsAttrib >> 20) & 7;
++    if (texscale < 1) texscale = 1;
++    vec2 ltex = vec2(texsize.xy) / float(texscale);
+ 
+     // texture flow mods
+     if (abs(vsNorm.z) >= 0.9) {
+@@ -54,14 +58,14 @@ void main() {
+         float pongperiod = mod(float(flowtimerms), 8000.0);
+         float pongradians = pongperiod * radians(360.0) / 8000.0;
+         float pongprogress = sin(pongradians);
+-        deltas.x = pongprogress * float(texsize.x) * 0.01 * sin(texuv.x / float(texsize.x) * radians(360.0));
+-        deltas.y = pongprogress * float(texsize.y) * 0.01 * sin(texuv.y / float(texsize.y) * radians(360.0));
++        deltas.x = pongprogress * ltex.x * 0.01 * sin(texuv.x / ltex.x * radians(360.0));
++        deltas.y = pongprogress * ltex.y * 0.01 * sin(texuv.y / ltex.y * radians(360.0));
+ 
+         // Swirling movement.
+         float flowperiod = mod(float(flowtimerms), 5000.0);
+         float flowradians = flowperiod * radians(360.0) / 5000.0;
+-        deltas.x += float(texsize.x) * 0.01 * sin(flowradians + texuv.y / float(texsize.y) * radians(360.0));
+-        deltas.y += float(texsize.y) * 0.01 * cos(flowradians + texuv.x / float(texsize.x) * radians(360.0));
++        deltas.x += ltex.x * 0.01 * sin(flowradians + texuv.y / ltex.y * radians(360.0));
++        deltas.y += ltex.y * 0.01 * cos(flowradians + texuv.x / ltex.x * radians(360.0));
+ 
+         // Small ripples.
+         // TODO(captainurist): radians(360 * 32) looks better on portals, radians(360 * 16) looks better on lava,
+@@ -69,14 +73,14 @@ void main() {
+         //                     radians(360 * 24).
+         float rippleperiod = mod(float(flowtimerms), 2000.0);
+         float rippleradians = rippleperiod * radians(360.0) / 2000.0;
+-        deltas.x = deltas.x - float(texsize.x) * 0.005 * cos(rippleradians + (texuv.y + deltas.y) / float(texsize.y) * radians(360.0 * 24.0));
++        deltas.x = deltas.x - ltex.x * 0.005 * cos(rippleradians + (texuv.y + deltas.y) / ltex.y * radians(360.0 * 24.0));
+     } else {
+-        deltas.x = texuvmod.x * mod(float(flowtimer), float(texsize.x));
+-        deltas.y = texuvmod.y * mod(float(flowtimer), float(texsize.y));
++        deltas.x = texuvmod.x * mod(float(flowtimer), ltex.x);
++        deltas.y = texuvmod.y * mod(float(flowtimer), ltex.y);
+     }
+ 
+-    texcoords.x = (deltas.x + texuv.x) / float(texsize.x);
+-    texcoords.y = (deltas.y + texuv.y) / float(texsize.y);
++    texcoords.x = (deltas.x + texuv.x) / ltex.x;
++    texcoords.y = (deltas.y + texuv.y) / ltex.y;
+     fragcol = texture(textureArray0, vec3(texcoords.x,texcoords.y,olayer));
+ 
+     vec4 toplayer = texture(textureArray0, vec3(texcoords.x,texcoords.y,0));
+diff --git a/MaM 7/OpenEnroth/resources/shaders/gloutbuild.frag b/MaM 7/OpenEnroth/resources/shaders/gloutbuild.frag
+index 375e202e..87972784 100644
+--- a/MaM 7/OpenEnroth/resources/shaders/gloutbuild.frag	
++++ b/MaM 7/OpenEnroth/resources/shaders/gloutbuild.frag	
+@@ -35,6 +35,10 @@ void main() {
+     vec2 texuvmod = vec2(0.0);
+     vec2 deltas = vec2(0.0);
+     ivec3 texsize = textureSize(textureArray0,0);
++    // HD textures hold more pixels than the UVs of the game data assume, bits 20-22 of the attributes carry the ratio.
++    int texscale = (vsAttrib >> 20) & 7;
++    if (texscale < 1) texscale = 1;
++    vec2 ltex = vec2(texsize.xy) / float(texscale);
+ 
+     // texture flow mods
+     if (abs(vsNorm.z) >= 0.9) {
+@@ -58,14 +62,14 @@ void main() {
+         float lavaradians = lavaperiod * radians(360.0) / 8000.0;
+         float curpos = sin(lavaradians);
+         deltas.x = 0.0;
+-        deltas.y = float(texsize.y) * curpos;
++        deltas.y = ltex.y * curpos;
+     } else {
+-        deltas.x = texuvmod.x * mod(float(flowtimer), float(texsize.x));
+-        deltas.y = texuvmod.y * mod(float(flowtimer), float(texsize.y));
++        deltas.x = texuvmod.x * mod(float(flowtimer), ltex.x);
++        deltas.y = texuvmod.y * mod(float(flowtimer), ltex.y);
+     }
+ 
+-    texcoords.x = (deltas.x + texuv.x) / float(texsize.x);
+-    texcoords.y = (deltas.y + texuv.y) / float(texsize.y);
++    texcoords.x = (deltas.x + texuv.x) / ltex.x;
++    texcoords.y = (deltas.y + texuv.y) / ltex.y;
+     fragcol = texture(textureArray0, vec3(texcoords.x,texcoords.y,olayer));
+ 
+     vec4 toplayer = texture(textureArray0, vec3(texcoords.x,texcoords.y,0));
 diff --git a/MaM 7/OpenEnroth/src/Application/GameConfig.h b/MaM 7/OpenEnroth/src/Application/GameConfig.h
 index 9beb8444..7945fcaf 100644
 --- a/MaM 7/OpenEnroth/src/Application/GameConfig.h	
@@ -48,6 +137,39 @@ index 9beb8444..7945fcaf 100644
          static int ValidateRenderWidth(int dimension) {
              if (dimension < 640)
                  return 640;
+diff --git a/MaM 7/OpenEnroth/src/Engine/AssetsManager.cpp b/MaM 7/OpenEnroth/src/Engine/AssetsManager.cpp
+index d5c3a617..e1317905 100644
+--- a/MaM 7/OpenEnroth/src/Engine/AssetsManager.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/AssetsManager.cpp	
+@@ -97,12 +97,12 @@ GraphicsImage *AssetsManager::getImage_ColorKey(std::string_view name, Color col
+ 
+ 
+ 
+-GraphicsImage *AssetsManager::getImage_Solid(std::string_view name) {
++GraphicsImage *AssetsManager::getImage_Solid(std::string_view name, bool allowHd) {
+     std::string filename = ascii::toLower(name);
+ 
+     auto i = images.find(filename);
+     if (i == images.end()) {
+-        auto image = GraphicsImage::Create(std::make_unique<Image16bit_LOD_Loader>(pIcons_LOD, filename));
++        auto image = GraphicsImage::Create(std::make_unique<Image16bit_LOD_Loader>(pIcons_LOD, filename, allowHd));
+         images[filename] = image;
+         return image;
+     }
+diff --git a/MaM 7/OpenEnroth/src/Engine/AssetsManager.h b/MaM 7/OpenEnroth/src/Engine/AssetsManager.h
+index 7d7522a7..74833ccc 100644
+--- a/MaM 7/OpenEnroth/src/Engine/AssetsManager.h	
++++ b/MaM 7/OpenEnroth/src/Engine/AssetsManager.h	
+@@ -22,7 +22,8 @@ class AssetsManager {
+ 
+     GraphicsImage *getImage_ColorKey(std::string_view name, Color colorkey = colorTable.TealMask);
+     GraphicsImage *getImage_Paletted(std::string_view name);
+-    GraphicsImage *getImage_Solid(std::string_view name);
++    /** @param allowHd                   Ours: false keeps the original size even if hd/icons has a replacement. */
++    GraphicsImage *getImage_Solid(std::string_view name, bool allowHd = true);
+     GraphicsImage *getImage_Alpha(std::string_view name);
+     GraphicsImage *getImage_Buff(std::string_view name);
+ 
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/CMakeLists.txt b/MaM 7/OpenEnroth/src/Engine/Graphics/CMakeLists.txt
 index 43e1c6b7..219f722a 100644
 --- a/MaM 7/OpenEnroth/src/Engine/Graphics/CMakeLists.txt	
@@ -62,10 +184,10 @@ index 43e1c6b7..219f722a 100644
          LightsStack.cpp
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp b/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp
 new file mode 100644
-index 00000000..68983cc7
+index 00000000..eb8344bc
 --- /dev/null
 +++ b/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp	
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,149 @@
 +#include "HdTextures.h"
 +
 +#include <algorithm>
@@ -154,7 +276,7 @@ index 00000000..68983cc7
 +    return scale;
 +}
 +
-+std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate) {
++std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate, int *scaleOut) {
 +    if (!hdEnabled() || originalWidth <= 0 || originalHeight <= 0)
 +        return std::nullopt;
 +    int scale = engine->config->graphics.HdTextures.value();
@@ -175,6 +297,8 @@ index 00000000..68983cc7
 +        image = areaResize(image, originalWidth * scale, originalHeight * scale);
 +
 +    MM_INFO("HD texture {} {}x{}", name, image.width(), image.height());
++    if (scaleOut)
++        *scaleOut = image.width() / originalWidth;
 +    if (desaturate) {
 +        float xs = engine->config->graphics.Saturation.value();
 +        float xv = engine->config->graphics.Lightness.value();
@@ -215,10 +339,10 @@ index 00000000..68983cc7
 +}
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.h b/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.h
 new file mode 100644
-index 00000000..c1a23aa6
+index 00000000..e1ee3452
 --- /dev/null
 +++ b/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.h	
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,36 @@
 +#pragma once
 +
 +#include <optional>
@@ -240,9 +364,11 @@ index 00000000..c1a23aa6
 + * @param originalWidth                 Size of the texture in bitmaps.lod.
 + * @param originalHeight
 + * @param desaturate                    Apply the same saturation and lightness adjustment as the loaded palettes get.
++ * @param[out] scaleOut                 Texture pixels per pixel of the original, if given.
 + * @return                              The replacement, or nothing if there is none or it is switched off.
 + */
-+std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate);
++std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate,
++                                      int *scaleOut = nullptr);
 +
 +/**
 + * Ours: `hd/icons/<name>.png` or `.jpg` replaces the colours of a UI image at a whole multiple of its size. The
@@ -254,7 +380,7 @@ index 00000000..c1a23aa6
 + */
 +void applyHdIcon(std::string_view name, RgbaImage *image, int *scale);
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/Image.cpp b/MaM 7/OpenEnroth/src/Engine/Graphics/Image.cpp
-index 678bcbcc..1d5a6957 100644
+index 678bcbcc..b24ab575 100644
 --- a/MaM 7/OpenEnroth/src/Engine/Graphics/Image.cpp	
 +++ b/MaM 7/OpenEnroth/src/Engine/Graphics/Image.cpp	
 @@ -20,6 +20,12 @@ GraphicsImage *GraphicsImage::Create(RgbaImage image) {
@@ -289,7 +415,67 @@ index 678bcbcc..1d5a6957 100644
  }
  
  RgbaImage &GraphicsImage::rgba() {
-@@ -92,6 +98,7 @@ bool GraphicsImage::initialize() {
+@@ -69,10 +75,58 @@ void GraphicsImage::release() {
+     delete this;
+ }
+ 
++/**
++ * Transparent texels are black, linear filtering of a magnified texture mixes that black into the edge of the opaque
++ * part and draws a dark outline (2D images on the scaled framebuffer). The uploaded copy gives every transparent
++ * texel next to an opaque one the average colour of its opaque neighbours, two texels deep, alpha stays 0.
++ */
++static RgbaImage bleedTransparentColours(const RgbaImage &image) {
++    RgbaImage result = RgbaImage::copy(image);
++    int w = result.width(), h = result.height();
++    for (int pass = 0; pass < 2; pass++) {
++        RgbaImage source = RgbaImage::copy(result);
++        for (int y = 0; y < h; y++) {
++            for (int x = 0; x < w; x++) {
++                if (source[y][x].a != 0 || (source[y][x].r | source[y][x].g | source[y][x].b) != 0)
++                    continue;
++                int r = 0, g = 0, b = 0, n = 0;
++                for (int dy = -1; dy <= 1; dy++) {
++                    for (int dx = -1; dx <= 1; dx++) {
++                        int nx = x + dx, ny = y + dy;
++                        if (nx < 0 || ny < 0 || nx >= w || ny >= h)
++                            continue;
++                        const Color &c = source[ny][nx];
++                        if (c.a == 0 && pass == 0)
++                            continue;
++                        if (c.a == 0 && (c.r | c.g | c.b) == 0)
++                            continue;
++                        r += c.r;
++                        g += c.g;
++                        b += c.b;
++                        n++;
++                    }
++                }
++                if (n)
++                    result[y][x] = Color(r / n, g / n, b / n, 0);
++            }
++        }
++    }
++    return result;
++}
++
+ [[nodiscard]] TextureRenderId GraphicsImage::renderId() {
+     if (!_renderId) {
+         initialize();
+-        _renderId = render->CreateTexture(_rgba);
++        bool hasTransparency = false;
++        if (!_loader || !_loader->paletted()) {
++            for (const Color &c : _rgba.pixels()) {
++                if (c.a == 0) {
++                    hasTransparency = true;
++                    break;
++                }
++            }
++        }
++        _renderId = hasTransparency ? render->CreateTexture(bleedTransparentColours(_rgba)) : render->CreateTexture(_rgba);
+     }
+ 
+     return _renderId;
+@@ -92,6 +146,7 @@ bool GraphicsImage::initialize() {
  
      assert(_loader);
      _initialized = _loader->Load(&_rgba);
@@ -327,17 +513,18 @@ index 6210b4f8..81bb9082 100644
  
  struct GraphicsImageDeleter {
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.cpp b/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.cpp
-index 7002c554..d318db96 100644
+index 7002c554..606ab147 100644
 --- a/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.cpp	
 +++ b/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.cpp	
-@@ -1,5 +1,6 @@
+@@ -1,5 +1,7 @@
  #include "ImageLoader.h"
  
++#include <algorithm>
 +#include <optional>
  #include <unordered_set>
  #include <string_view>
  #include <memory>
-@@ -10,6 +11,9 @@
+@@ -10,6 +12,9 @@
  #include "Engine/Graphics/AtlasLayout.h"
  #include "Engine/Graphics/Renderer/Renderer.h"
  #include "Engine/Graphics/TileGenerator.h"
@@ -347,7 +534,7 @@ index 7002c554..d318db96 100644
  #include "Engine/Resources/LodTextureCache.h"
  #include "Engine/Resources/LodSpriteCache.h"
  #include "Engine/Graphics/PaletteManager.h"
-@@ -78,6 +82,7 @@ bool ColorKey_LOD_Loader::Load(RgbaImage *rgbaImage) {
+@@ -78,6 +83,7 @@ bool ColorKey_LOD_Loader::Load(RgbaImage *rgbaImage) {
      }
  
      *rgbaImage = makeRgbaImage(tex->image, palette);
@@ -355,7 +542,16 @@ index 7002c554..d318db96 100644
  
      return true;
  }
-@@ -105,6 +110,7 @@ bool Alpha_LOD_Loader::Load(RgbaImage *rgbaImage) {
+@@ -95,6 +101,8 @@ bool Image16bit_LOD_Loader::Load(RgbaImage *rgbaImage) {
+     }
+ 
+     *rgbaImage = makeRgbaImage(tex->image, palette);
++    if (allowHd)
++        applyHdIcon(resource_name, rgbaImage, &_scale);
+ 
+     return true;
+ }
+@@ -105,6 +113,7 @@ bool Alpha_LOD_Loader::Load(RgbaImage *rgbaImage) {
          return false;
  
      *rgbaImage = makeRgbaImage(tex->image, MakePaletteAlpha(tex->palette));
@@ -363,7 +559,7 @@ index 7002c554..d318db96 100644
  
      return true;
  }
-@@ -186,6 +192,8 @@ bool PCX_LOD_Compressed_Loader::Load(RgbaImage *rgbaImage) {
+@@ -186,6 +195,8 @@ bool PCX_LOD_Compressed_Loader::Load(RgbaImage *rgbaImage) {
      for (Color &pixel : rgbaImage->pixels())
          if (pixel == colorkey)
              pixel = Color();
@@ -372,17 +568,24 @@ index 7002c554..d318db96 100644
  
      return result;
  }
-@@ -262,6 +270,9 @@ bool Bitmaps_LOD_Loader::Load(RgbaImage *rgbaImage) {
+@@ -262,12 +273,16 @@ bool Bitmaps_LOD_Loader::Load(RgbaImage *rgbaImage) {
          }
      }
  
-+    if (std::optional<RgbaImage> hd = loadHdBitmap(this->resource_name, w, h, true))
++    if (std::optional<RgbaImage> hd = loadHdBitmap(this->resource_name, w, h, true, &_scale))
 +        *rgbaImage = std::move(*hd);
 +
      return true;
  }
  
-@@ -281,6 +292,14 @@ bool Bitmaps_GEN_Loader::Load(RgbaImage *rgbaImage) {
+ bool Bitmaps_GEN_Loader::Load(RgbaImage *rgbaImage) {
+     pTileGenerator->ensureTile(this->resource_name);
+     *rgbaImage = png::decode(ufs->read(this->resource_name));
++    _scale = std::max(1, rgbaImage->width() / 128);  // Generated from HD tiles the tile is bigger than the 128 px of the data.
+ 
+     // Desaturate.
+     float xs = engine->config->graphics.Saturation.value();
+@@ -281,6 +296,14 @@ bool Bitmaps_GEN_Loader::Load(RgbaImage *rgbaImage) {
  bool Sprites_LOD_Loader::Load(RgbaImage *rgbaImage) {
      LodSprite sprite = lod::decodeSprite(lod->read(this->resource_name));
  
@@ -398,14 +601,16 @@ index 7002c554..d318db96 100644
  
      auto srcPixels = sprite.image.pixels();
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.h b/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.h
-index c0b05287..1bf6c26d 100644
+index c0b05287..8f742bdb 100644
 --- a/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.h	
 +++ b/MaM 7/OpenEnroth/src/Engine/Graphics/ImageLoader.h	
-@@ -16,9 +16,11 @@ class ImageLoader {
+@@ -16,9 +16,13 @@ class ImageLoader {
      const std::string &GetResourceName() const { return this->resource_name; }
  
      virtual bool Load(RgbaImage *rgbaImage) = 0;
 +    int scale() const { return _scale; }
++    /** Ours: the texture holds palette indices, not colours (sprites), its transparent texels must stay as they are. */
++    virtual bool paletted() const { return false; }
  
   protected:
      std::string resource_name;
@@ -413,11 +618,75 @@ index c0b05287..1bf6c26d 100644
  };
  
  class Paletted_Img_Loader : public ImageLoader {
+@@ -51,15 +55,21 @@ class ColorKey_LOD_Loader : public ImageLoader {
+ 
+ class Image16bit_LOD_Loader : public ImageLoader {
+  public:
+-    inline Image16bit_LOD_Loader(LodTextureCache *lod, std::string_view filename) {
++    /**
++     * @param allowHd                   Ours: whether an HD replacement may be used. Minimaps are read pixel by pixel
++     *                                  at their original size, they keep it.
++     */
++    inline Image16bit_LOD_Loader(LodTextureCache *lod, std::string_view filename, bool allowHd = true) {
+         this->resource_name = filename;
+         this->lod = lod;
++        this->allowHd = allowHd;
+     }
+ 
+     virtual bool Load(RgbaImage *rgbaImage) override;
+ 
+  protected:
+     LodTextureCache *lod = nullptr;
++    bool allowHd = true;
+ };
+ 
+ class Alpha_LOD_Loader : public ImageLoader {
+@@ -155,6 +165,7 @@ class Sprites_LOD_Loader : public ImageLoader {
+     }
+ 
+     virtual bool Load(RgbaImage *rgbaImage) override;
++    virtual bool paletted() const override { return true; }
+ 
+  protected:
+     LodSpriteCache *lod = nullptr;
+diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/Indoor.h b/MaM 7/OpenEnroth/src/Engine/Graphics/Indoor.h
+index 434db1bb..c7f5ce7a 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Graphics/Indoor.h	
++++ b/MaM 7/OpenEnroth/src/Engine/Graphics/Indoor.h	
+@@ -168,6 +168,7 @@ struct BLVFace {
+     int animationId = 0; // Index into pTextureFrameTable for animated faces.
+     int texunit = -1;
+     int texlayer = -1;
++    int texscale = 1;  // Texture pixels per pixel of the face UVs, HD textures have more.
+ 
+     int sectorId = 0;
+     int backSectorId = 0;
+diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/Outdoor.cpp b/MaM 7/OpenEnroth/src/Engine/Graphics/Outdoor.cpp
+index ecb09cb3..ab6ee1d9 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Graphics/Outdoor.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Graphics/Outdoor.cpp	
+@@ -497,7 +497,7 @@ void OutdoorLocation::Load(std::string_view filename, int days_played, int respa
+     std::string_view minimap_filename = filename.substr(0, filename.length() - 4);
+     if (viewparams->location_minimap)
+         viewparams->location_minimap->release();
+-    viewparams->location_minimap = assets->getImage_Solid(minimap_filename);
++    viewparams->location_minimap = assets->getImage_Solid(minimap_filename, false);  // Read pixel by pixel.
+ 
+     std::string odm_filename = std::string(filename);
+     odm_filename.replace(odm_filename.length() - 4, 4, ".odm");
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp b/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
-index af34ab73..17a71aed 100644
+index af34ab73..486ddd7a 100644
 --- a/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp	
 +++ b/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp	
-@@ -208,11 +208,12 @@ OpenGLRenderer::~OpenGLRenderer() {
+@@ -7,6 +7,7 @@
+ #include <memory>
+ #include <utility>
+ #include <map>
++#include <vector>
+ #include <string>
+ #include <tuple>
+ 
+@@ -208,11 +209,12 @@ OpenGLRenderer::~OpenGLRenderer() {
  }
  
  RgbaImage OpenGLRenderer::ReadScreenPixels() {
@@ -432,7 +701,49 @@ index af34ab73..17a71aed 100644
      if (outputRender != outputPresent) {
          glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
      }
-@@ -568,6 +569,7 @@ void OpenGLRenderer::BlendTextures(int x, int y, GraphicsImage *imgin, GraphicsI
+@@ -249,6 +251,32 @@ void OpenGLRenderer::BeginLines2D() {
+ void OpenGLRenderer::EndLines2D() {
+     if (_lineVertices.empty()) return;
+ 
++    // GL_LINES are one framebuffer pixel wide whatever the scale, the minimap would turn thin and pale. With a scaled
++    // framebuffer every line becomes a strip one logical pixel wide, centred on the pixels it joins.
++    GLenum mode = GL_LINES;
++    if (_renderScale > 1) {
++        std::vector<LineVertex> strips;
++        strips.reserve(_lineVertices.size() * 3);
++        for (size_t i = 0; i + 1 < _lineVertices.size(); i += 2) {
++            const LineVertex &a = _lineVertices[i];
++            const LineVertex &b = _lineVertices[i + 1];
++            Vec2f pa(a.pos.x + 0.5f, a.pos.y + 0.5f), pb(b.pos.x + 0.5f, b.pos.y + 0.5f);
++            Vec2f d = pb - pa;
++            float len = std::sqrt(d.x * d.x + d.y * d.y);
++            Vec2f along = len < 0.001f ? Vec2f(0.5f, 0) : Vec2f(d.x / len * 0.5f, d.y / len * 0.5f);
++            Vec2f side(-along.y, along.x);
++            Vec2f corners[4] = {pa - along + side, pa - along - side, pb + along - side, pb + along + side};
++            const Colorf *colors[4] = {&a.color, &a.color, &b.color, &b.color};
++            for (int k : {0, 1, 2, 0, 2, 3}) {
++                LineVertex &v = strips.emplace_back();
++                v.pos = corners[k];
++                v.color = *colors[k];
++            }
++        }
++        _lineVertices = std::move(strips);
++        mode = GL_TRIANGLES;
++    }
++
+     _lineBuffer.update(_lineVertices);
+     _lineBuffer.bind();
+ 
+@@ -259,7 +287,7 @@ void OpenGLRenderer::EndLines2D() {
+     uniforms.view = viewmat;
+     uniforms.submit(lineshader);
+ 
+-    glDrawArrays(GL_LINES, 0, _lineVertices.size());
++    glDrawArrays(mode, 0, _lineVertices.size());
+     drawcalls++;
+ 
+     lineshader.unuse();
+@@ -568,6 +596,7 @@ void OpenGLRenderer::BlendTextures(int x, int y, GraphicsImage *imgin, GraphicsI
          const RgbaImage &maskImage = imgblend->rgba();
  
          RgbaImage dstImage = RgbaImage::solid(Color(), imgin->size());
@@ -440,7 +751,7 @@ index af34ab73..17a71aed 100644
  
          Color c = maskImage.pixels()[2700];  // guess at brightest pixel
          unsigned int rmax = c.r;
-@@ -589,8 +591,8 @@ void OpenGLRenderer::BlendTextures(int x, int y, GraphicsImage *imgin, GraphicsI
+@@ -589,8 +618,8 @@ void OpenGLRenderer::BlendTextures(int x, int y, GraphicsImage *imgin, GraphicsI
                  // should go blue -> black -> blue reverse
                  // patchy -> solid -> patchy
  
@@ -451,7 +762,7 @@ index af34ab73..17a71aed 100644
  
                      unsigned int rcur = pixcol.r;
                      unsigned int gcur = pixcol.g;
-@@ -785,7 +787,7 @@ RgbaImage OpenGLRenderer::MakeViewportScreenshot(const int width, const int heig
+@@ -785,7 +814,7 @@ RgbaImage OpenGLRenderer::MakeViewportScreenshot(const int width, const int heig
      if (uCurrentlyLoadedLevelType != LEVEL_NULL) {
          for (int y = 0; y < height; ++y) {
              for (int x = 0; x < width; ++x) {
@@ -460,7 +771,7 @@ index af34ab73..17a71aed 100644
              }
          }
      }
-@@ -952,11 +954,12 @@ void OpenGLRenderer::_set_3d_modelview_matrix() {
+@@ -952,11 +981,12 @@ void OpenGLRenderer::_set_3d_modelview_matrix() {
  
  // TODO(pskelton): to camera?
  void OpenGLRenderer::_set_ortho_projection(bool gameviewport) {
@@ -475,7 +786,25 @@ index af34ab73..17a71aed 100644
          projmat = glm::ortho(float(pViewport.x), float(pViewport.x + pViewport.w - 1), float(pViewport.y + pViewport.h - 1), float(pViewport.y), float(1), float(-1));
      }
  }
-@@ -1937,7 +1940,8 @@ void OpenGLRenderer::SetBillboardBlendOptions(RenderBillboardD3D::OpacityType a1
+@@ -997,7 +1027,7 @@ void OpenGLRenderer::DrawOutdoorTerrain() {
+ 
+         // reserve first 7 layers for water tiles in unit 0
+         auto wtrtexture = this->hd_water_tile_anim[0];
+-        terraintexturesizes[0] = wtrtexture->width();
++        terraintexturesizes[0] = wtrtexture->rgba().width();
+ 
+         for (int buff = 0; buff < 7; buff++) {
+             std::string container_name = fmt::format("HDWTR{:03}", buff);
+@@ -1028,7 +1058,7 @@ void OpenGLRenderer::DrawOutdoorTerrain() {
+                 } else {
+                     // else need to add it
+                     auto thistexture = assets->getBitmap(tile.textureName, tile.flags & TILE_GENERATED_TRANSITION);
+-                    int width = thistexture->width();
++                    int width = thistexture->rgba().width();
+                     // check size to see what unit it needs
+                     int i;
+                     for (i = 0; i < 8; i++) {
+@@ -1937,7 +1967,8 @@ void OpenGLRenderer::SetBillboardBlendOptions(RenderBillboardD3D::OpacityType a1
  
  void OpenGLRenderer::SetUIClipRect(const Recti &rect) {
      this->clipRect = rect;
@@ -485,7 +814,7 @@ index af34ab73..17a71aed 100644
  }
  
  void OpenGLRenderer::ResetUIClipRect() {
-@@ -2203,9 +2207,10 @@ void OpenGLRenderer::flushAndScale() {
+@@ -2203,9 +2234,10 @@ void OpenGLRenderer::flushAndScale() {
          rect.w = w;
          rect.h = h;
  
@@ -498,7 +827,7 @@ index af34ab73..17a71aed 100644
          glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
      }
  }
-@@ -2213,7 +2218,7 @@ void OpenGLRenderer::flushAndScale() {
+@@ -2213,7 +2245,7 @@ void OpenGLRenderer::flushAndScale() {
  void OpenGLRenderer::swapBuffers() {
      if (outputRender != outputPresent) {
          glEnable(GL_SCISSOR_TEST);
@@ -507,7 +836,141 @@ index af34ab73..17a71aed 100644
      }
  
      openGLContext->swapBuffers();
-@@ -3431,6 +3436,16 @@ void OpenGLRenderer::_initWaterTiles() {
+@@ -2255,8 +2287,8 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
+         auto wtrtexture = this->hd_water_tile_anim[0];
+         //terraintexmap.insert(std::make_pair("wtrtyl", terraintexmap.size()));
+         //numterraintexloaded[0]++;
+-        outbuildtexturewidths[0] = wtrtexture->width();
+-        outbuildtextureheights[0] = wtrtexture->height();
++        outbuildtexturewidths[0] = wtrtexture->rgba().width();
++        outbuildtextureheights[0] = wtrtexture->rgba().height();
+ 
+         for (int buff = 0; buff < 7; buff++) {
+             std::string container_name = fmt::format("HDWTR{:03}", buff);
+@@ -2295,6 +2327,7 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
+ 
+                         int texunit = 0;
+                         int texlayer = 0;
++                        int texscale = 1;
+                         int attribflags = 0;
+ 
+                         if (face.attributes & FACE_IsFluid)
+@@ -2324,15 +2357,18 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
+                                 int unitlayer = mapiter->second;
+                                 texlayer = unitlayer & 0xFF;
+                                 texunit = (unitlayer & 0xFF00) >> 8;
++                                texscale = (unitlayer >> 16) & 7;
+                             } else if (texname == "wtrtyl") {
+                                 // water tile
++                                texscale = assets->getBitmap("wtrtyl")->scale();
+                                 texunit = 0;
+                                 texlayer = 0;
+                             } else {
+                                 // else need to add it
+                                 auto thistexture = assets->getBitmap(texname);
+-                                int width = thistexture->width();
+-                                int height = thistexture->height();
++                                int width = thistexture->rgba().width();
++                                int height = thistexture->rgba().height();
++                                texscale = thistexture->scale();
+                                 // check size to see what unit it needs
+                                 int i;
+                                 for (i = 0; i < 16; i++) {
+@@ -2352,8 +2388,8 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
+                                     texunit = i;
+                                     texlayer = numoutbuildtexloaded[i];
+ 
+-                                    // encode unit and layer together
+-                                    int encode = (texunit << 8) | texlayer;
++                                    // encode unit, layer and texture scale together
++                                    int encode = (texscale << 16) | (texunit << 8) | texlayer;
+ 
+                                     if (numoutbuildtexloaded[i] < 256) {
+                                         // intsert into tex map
+@@ -2378,6 +2414,7 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
+ 
+                         face.texunit = texunit;
+                         face.texlayer = texlayer;
++                        face.texscale = texscale;
+                     }
+                 }
+             }
+@@ -2519,6 +2556,7 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
+                                     // 123, 134, 145, 156..
+ 
+                                     // copy first
++                                    attribflags |= std::clamp(face.texscale, 1, 7) << 20;
+                                     ShaderVertex &v0 = _outbuildVertices[texunit].emplace_back();
+                                     v0.pos = model.vertices[face.vertexIds[0]];
+                                     v0.texuv = Vec2f(face.textureUs[0] + face.textureDeltaU,
+@@ -2772,8 +2810,8 @@ void OpenGLRenderer::DrawIndoorFaces() {
+             auto wtrtexture = this->hd_water_tile_anim[0];
+             //terraintexmap.insert(std::make_pair("wtrtyl", terraintexmap.size()));
+             //numterraintexloaded[0]++;
+-            bsptexturewidths[0] = wtrtexture->width();
+-            bsptextureheights[0] = wtrtexture->height();
++            bsptexturewidths[0] = wtrtexture->rgba().width();
++            bsptextureheights[0] = wtrtexture->rgba().height();
+ 
+             for (int buff = 0; buff < 7; buff++) {
+                 std::string container_name = fmt::format("HDWTR{:03}", buff);
+@@ -2805,6 +2843,7 @@ void OpenGLRenderer::DrawIndoorFaces() {
+ 
+                 int texunit = 0;
+                 int texlayer = 0;
++                int texscale = 1;
+ 
+                 // loop while running down animlength with frame animtimes
+                 do {
+@@ -2816,15 +2855,18 @@ void OpenGLRenderer::DrawIndoorFaces() {
+                         // TODO(pskelton): make this a pair/struct rather than encoding
+                         texlayer = unitlayer & 0xFF;
+                         texunit = (unitlayer & 0xFF00) >> 8;
++                        texscale = (unitlayer >> 16) & 7;
+                     } else if (texname == "wtrtyl") {
+                         // water tile
++                        texscale = assets->getBitmap("wtrtyl")->scale();
+                         texunit = 0;
+                         texlayer = 0;
+                     } else {
+                         // else need to add it
+                         auto thistexture = assets->getBitmap(texname);
+-                        int width = thistexture->width();
+-                        int height = thistexture->height();
++                        int width = thistexture->rgba().width();
++                        int height = thistexture->rgba().height();
++                        texscale = thistexture->scale();
+                         // check size to see what unit it needs
+                         int i;
+                         for (i = 0; i < 16; i++) {
+@@ -2844,8 +2886,8 @@ void OpenGLRenderer::DrawIndoorFaces() {
+                             texunit = i;
+                             texlayer = bsptexloaded[i];
+ 
+-                            // encode unit and layer together
+-                            int encode = (texunit << 8) | texlayer;
++                            // encode unit, layer and texture scale together
++                            int encode = (texscale << 16) | (texunit << 8) | texlayer;
+ 
+                             if (bsptexloaded[i] < 256) {
+                                 // intsert into tex map
+@@ -2870,6 +2912,7 @@ void OpenGLRenderer::DrawIndoorFaces() {
+ 
+                 face->texunit = texunit;
+                 face->texlayer = texlayer;
++                face->texscale = texscale;
+             }
+ 
+             for (int l = 0; l < 16; l++) {
+@@ -3008,6 +3051,7 @@ void OpenGLRenderer::DrawIndoorFaces() {
+                     // 123, 134, 145, 156..
+ 
+                     // copy first
++                    attribflags |= std::clamp(face->texscale, 1, 7) << 20;
+                     ShaderVertex &v0 = _bspVertices[texunit].emplace_back();
+                     v0.pos = pIndoor->vertices[face->vertexIds[0]];
+                     v0.texuv = Vec2f(face->textureUs[0] + face->textureDeltaU,
+@@ -3431,6 +3475,16 @@ void OpenGLRenderer::_initWaterTiles() {
  bool OpenGLRenderer::Reinitialize(bool firstInit) {
      BaseRenderer::Reinitialize(firstInit);
  
@@ -524,7 +987,7 @@ index af34ab73..17a71aed 100644
      glClearColor(0.0f, 0.0f, 0.0f, 1.0f);       // Black Background
      glClearDepthf(1.0f);
  
-@@ -3453,7 +3468,7 @@ bool OpenGLRenderer::Reinitialize(bool firstInit) {
+@@ -3453,7 +3507,7 @@ bool OpenGLRenderer::Reinitialize(bool firstInit) {
      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
@@ -533,7 +996,7 @@ index af34ab73..17a71aed 100644
      glBindTexture(GL_TEXTURE_2D, 0);
  
      glBindTexture(GL_TEXTURE_2D, framebufferTextures[1]);
-@@ -3461,11 +3476,11 @@ bool OpenGLRenderer::Reinitialize(bool firstInit) {
+@@ -3461,11 +3515,11 @@ bool OpenGLRenderer::Reinitialize(bool firstInit) {
      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -548,6 +1011,16 @@ index af34ab73..17a71aed 100644
      glEnable(GL_SCISSOR_TEST);
  
      this->clipRect = Recti(Pointi(0, 0), outputRender);
+@@ -3685,6 +3739,9 @@ void OpenGLRenderer::DrawTwodVerts() {
+         // set texture
+         GLfloat thistex = _twodVertices[offset].texid;
+         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(_twodVertices[offset].texid));
++        // UI images are drawn once, not tiled: with GL_REPEAT a magnified image blends its opposite edge into its border.
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+         if (_twodVertices[offset].paletteid) {
+             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.h b/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.h
 index b1d00bba..e37898fc 100644
 --- a/MaM 7/OpenEnroth/src/Engine/Graphics/Renderer/OpenGLRenderer.h	

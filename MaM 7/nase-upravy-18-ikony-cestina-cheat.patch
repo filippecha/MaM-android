@@ -1,0 +1,155 @@
+diff --git a/MaM 7/OpenEnroth/src/Engine/Engine.cpp b/MaM 7/OpenEnroth/src/Engine/Engine.cpp
+index 3ebbef70..e78dc1ab 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Engine.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Engine.cpp	
+@@ -1167,8 +1167,9 @@ void _494035_timed_effects__water_walking_damage__etc(Duration dt) {
+     }
+ 
+     if (pParty->pPartyBuffs[PARTY_BUFF_HASTE].Expired()) {
+-        for (Character &character : pParty->pCharacters)
+-            character.SetCondition(CONDITION_WEAK, 0);
++        if (!pParty->pPartyBuffs[PARTY_BUFF_HASTE].isGM) // Ours: the haste of the cheat leaves no weakness.
++            for (Character &character : pParty->pCharacters)
++                character.SetCondition(CONDITION_WEAK, 0);
+         pParty->pPartyBuffs[PARTY_BUFF_HASTE].Reset();
+     }
+ 
+diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp b/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp
+index eb8344bc..9671bd02 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Graphics/HdTextures.cpp	
+@@ -140,7 +140,9 @@ void applyHdIcon(std::string_view name, RgbaImage *image, int *scale) {
+     for (int y = 0; y < hd->height(); y++) {
+         for (int x = 0; x < hd->width(); x++) {
+             Color &pixel = (*hd)[y][x];
+-            uint8_t alpha = (*image)[y / factor][x / factor].a;
++            // The original's transparency, and the HD file's own where it has one (the buff icons at the portraits
++            // without their background square and shadow, tools/hd-upscale/isg_alpha.py).
++            uint8_t alpha = std::min((*image)[y / factor][x / factor].a, pixel.a);
+             pixel = alpha == 0 ? Color() : Color(pixel.r, pixel.g, pixel.b, alpha);
+         }
+     }
+diff --git a/MaM 7/OpenEnroth/src/Engine/Localization.cpp b/MaM 7/OpenEnroth/src/Engine/Localization.cpp
+index 7e28d9a9..079f37d5 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Localization.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Localization.cpp	
+@@ -57,50 +57,51 @@ bool Localization::initialize() {
+     _hasSprintfexTokens = std::ranges::any_of(_localizationStrings, [](const std::string &s) { return s.contains('^'); });
+ 
+     // TODO(captainurist): should be moved to localization files eventually
+-    this->_localizationStrings[LSTR_FMT_S_STOLE_D_ITEM] = "%s stole %s!";
+-    this->_localizationStrings[LSTR_FMT_RECOVERY_TIME_D] = "Recovery time: %d";
+-    this->_localizationStrings[LSTR_FMT_S_U_OUT_OF_U] = "%s: %lu out of %lu";
+-    this->_localizationStrings[LSTR_NOBODY_IS_IN_CONDITION] = "Nobody is in a condition to do anything!";
+-    this->_localizationStrings[LSTR_KEY_CONFLICT] = "Please resolve all key conflicts!";
+-    this->_localizationStrings[LSTR_RECOVERY_TIME_NA] = "Recovery time: N/A";
+-    this->_localizationStrings[LSTR_WAND_ALREADY_CHARGED] = "Wand already charged!";
+-    this->_localizationStrings[LSTR_ENERGY] = "Energy";
+-    this->_localizationStrings[LSTR_IMMOLATION_DAMAGE] = "Immolation deals %d damage to %d target(s)";
+-    this->_localizationStrings[LSTR_REMAINING_POWER] = "Remaining power: %d";
+-    this->_localizationStrings[LSTR_PLAYER_IS_NOT_ACTIVE] = "That player is not active";
+-    this->_localizationStrings[LSTR_NEW_SAVE] = "[New Save]";
+-    this->_localizationStrings[LSTR_QUICKSAVE] = "Quicksave";
+-    this->_localizationStrings[LSTR_SET_A_QUICK_SPELL] = "Set a Quick Spell that targets a monster!";
+-    this->_localizationStrings[LSTR_ARMOR_HALVED] = "Armor Halved";
+-    this->_localizationStrings[LSTR_S_HALVES_ARMOR_OF_S] = "%s halves armor of %s";
+-
+-    this->_specialAttackNames[SPECIAL_ATTACK_CURSE] = "Curse";
+-    this->_specialAttackNames[SPECIAL_ATTACK_WEAK] = "Weaken";
+-    this->_specialAttackNames[SPECIAL_ATTACK_SLEEP] = "Sleep";
+-    this->_specialAttackNames[SPECIAL_ATTACK_DRUNK] = "Drunk"; // "Inebriate"?
+-    this->_specialAttackNames[SPECIAL_ATTACK_INSANE] = "Insanity";
+-    this->_specialAttackNames[SPECIAL_ATTACK_POISON_WEAK] = "Poison";
+-    this->_specialAttackNames[SPECIAL_ATTACK_POISON_MEDIUM] = "Poison";
+-    this->_specialAttackNames[SPECIAL_ATTACK_POISON_SEVERE] = "Poison";
+-    this->_specialAttackNames[SPECIAL_ATTACK_DISEASE_WEAK] = "Disease";
+-    this->_specialAttackNames[SPECIAL_ATTACK_DISEASE_MEDIUM] = "Disease";
+-    this->_specialAttackNames[SPECIAL_ATTACK_DISEASE_SEVERE] = "Disease";
+-    this->_specialAttackNames[SPECIAL_ATTACK_PARALYZED] = "Paralyze";
+-    this->_specialAttackNames[SPECIAL_ATTACK_UNCONSCIOUS] = "Knockout";
+-    this->_specialAttackNames[SPECIAL_ATTACK_DEAD] = "Death";
+-    this->_specialAttackNames[SPECIAL_ATTACK_PETRIFIED] = "Petrify";
+-    this->_specialAttackNames[SPECIAL_ATTACK_ERADICATED] = "Eradicate";
+-    this->_specialAttackNames[SPECIAL_ATTACK_BREAK_ANY] = "Break Item";
+-    this->_specialAttackNames[SPECIAL_ATTACK_BREAK_ARMOR] = "Break Armor";
+-    this->_specialAttackNames[SPECIAL_ATTACK_BREAK_WEAPON] = "Break Weapon";
+-    this->_specialAttackNames[SPECIAL_ATTACK_STEAL] = "Steal";
+-    this->_specialAttackNames[SPECIAL_ATTACK_AGING] = "Aging";
+-    this->_specialAttackNames[SPECIAL_ATTACK_MANA_DRAIN] = "SP Drain";
+-    this->_specialAttackNames[SPECIAL_ATTACK_FEAR] = "Fear";
+-
+-    this->_monsterSpecialAbilityNames[MONSTER_SPECIAL_ABILITY_MULTI_SHOT] = "Multi-shot";
+-    this->_monsterSpecialAbilityNames[MONSTER_SPECIAL_ABILITY_SUMMON] = "Summoner";
+-    this->_monsterSpecialAbilityNames[MONSTER_SPECIAL_ABILITY_EXPLODE] = "Explodes";
++    // Ours: in Czech (cp1250), the Czech data has no text for these.
++    this->_localizationStrings[LSTR_FMT_S_STOLE_D_ITEM] = "%s ukradl %s!";
++    this->_localizationStrings[LSTR_FMT_RECOVERY_TIME_D] = "Doba zotaven\xed: %d";
++    this->_localizationStrings[LSTR_FMT_S_U_OUT_OF_U] = "%s: %lu z %lu";
++    this->_localizationStrings[LSTR_NOBODY_IS_IN_CONDITION] = "Nikdo nen\xed schopen nic d\xeclat!";
++    this->_localizationStrings[LSTR_KEY_CONFLICT] = "Vy\xf8" "e\x9ate v\x9a" "echny konflikty kl\xe1ves!";
++    this->_localizationStrings[LSTR_RECOVERY_TIME_NA] = "Doba zotaven\xed: nen\xed";
++    this->_localizationStrings[LSTR_WAND_ALREADY_CHARGED] = "H\xf9lka u\x9e je nabit\xe1!";
++    this->_localizationStrings[LSTR_ENERGY] = "Energie";
++    this->_localizationStrings[LSTR_IMMOLATION_DAMAGE] = "Ob\xectov\xe1n\xed: %d zran\xecn\xed, zasa\x9e" "en\xe9 c\xedle: %d";
++    this->_localizationStrings[LSTR_REMAINING_POWER] = "Zb\xfdvaj\xed" "c\xed s\xedla: %d";
++    this->_localizationStrings[LSTR_PLAYER_IS_NOT_ACTIVE] = "Tato postava nen\xed aktivn\xed";
++    this->_localizationStrings[LSTR_NEW_SAVE] = "[Nov\xe1 pozice]";
++    this->_localizationStrings[LSTR_QUICKSAVE] = "Rychl\xe9 ulo\x9e" "en\xed";
++    this->_localizationStrings[LSTR_SET_A_QUICK_SPELL] = "Nastavte rychl\xe9 kouzlo m\xed\xf8\xed" "c\xed na nestv\xf9ru!";
++    this->_localizationStrings[LSTR_ARMOR_HALVED] = "Zbroj na polovinu";
++    this->_localizationStrings[LSTR_S_HALVES_ARMOR_OF_S] = "%s sn\xed\x9eil na polovinu zbroj: %s";
++
++    this->_specialAttackNames[SPECIAL_ATTACK_CURSE] = "Proklet\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_WEAK] = "Oslaben\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_SLEEP] = "Sp\xe1nek";
++    this->_specialAttackNames[SPECIAL_ATTACK_DRUNK] = "Opilost"; // "Inebriate"?
++    this->_specialAttackNames[SPECIAL_ATTACK_INSANE] = "\x8a\xedlenstv\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_POISON_WEAK] = "Jed";
++    this->_specialAttackNames[SPECIAL_ATTACK_POISON_MEDIUM] = "Jed";
++    this->_specialAttackNames[SPECIAL_ATTACK_POISON_SEVERE] = "Jed";
++    this->_specialAttackNames[SPECIAL_ATTACK_DISEASE_WEAK] = "Nemoc";
++    this->_specialAttackNames[SPECIAL_ATTACK_DISEASE_MEDIUM] = "Nemoc";
++    this->_specialAttackNames[SPECIAL_ATTACK_DISEASE_SEVERE] = "Nemoc";
++    this->_specialAttackNames[SPECIAL_ATTACK_PARALYZED] = "Ochromen\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_UNCONSCIOUS] = "Bezv\xec" "dom\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_DEAD] = "Smrt";
++    this->_specialAttackNames[SPECIAL_ATTACK_PETRIFIED] = "Zkamen\xecn\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_ERADICATED] = "Vymaz\xe1n\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_BREAK_ANY] = "L\xe1m\xe1n\xed p\xf8" "edm\xect\xf9";
++    this->_specialAttackNames[SPECIAL_ATTACK_BREAK_ARMOR] = "L\xe1m\xe1n\xed zbroje";
++    this->_specialAttackNames[SPECIAL_ATTACK_BREAK_WEAPON] = "L\xe1m\xe1n\xed zbran\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_STEAL] = "Kr\xe1" "de\x9e";
++    this->_specialAttackNames[SPECIAL_ATTACK_AGING] = "St\xe1rnut\xed";
++    this->_specialAttackNames[SPECIAL_ATTACK_MANA_DRAIN] = "Vys\xe1t\xed many";
++    this->_specialAttackNames[SPECIAL_ATTACK_FEAR] = "Strach";
++
++    this->_monsterSpecialAbilityNames[MONSTER_SPECIAL_ABILITY_MULTI_SHOT] = "V\xed" "ce st\xf8" "el";
++    this->_monsterSpecialAbilityNames[MONSTER_SPECIAL_ABILITY_SUMMON] = "Vyvol\xe1va\xe8";
++    this->_monsterSpecialAbilityNames[MONSTER_SPECIAL_ABILITY_EXPLODE] = "Exploduje";
+ 
+     this->_skillValueShortTemplates[MASTERY_NOVICE] = "%d";
+     this->_skillValueShortTemplates[MASTERY_EXPERT] = "%dE";
+diff --git a/MaM 7/OpenEnroth/src/Engine/Party.cpp b/MaM 7/OpenEnroth/src/Engine/Party.cpp
+index d40ebbe4..702c7a4a 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Party.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Party.cpp	
+@@ -645,6 +645,7 @@ void Party::updateCharactersAndHirelingsEmotions() {
+             player.mana = player.GetMaxMana();
+             keepCheatBuff(player.pCharacterBuffs[CHARACTER_BUFF_BLESS], 15);
+             keepCheatBuff(player.pCharacterBuffs[CHARACTER_BUFF_FATE], 60);
++            keepCheatBuff(player.pCharacterBuffs[CHARACTER_BUFF_PRESERVATION], 0);
+         }
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_HEROISM], 15);
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_DAY_OF_GODS], 60);
+@@ -652,8 +653,11 @@ void Party::updateCharactersAndHirelingsEmotions() {
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_WIZARD_EYE], 0);
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_SHIELD], 0);
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_STONE_SKIN], 15);
++        keepCheatBuff(pPartyBuffs[PARTY_BUFF_PROTECTION_FROM_MAGIC], 10); // Ten blocked spells, refilled every frame.
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_DETECT_LIFE], 0);
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_FEATHER_FALL], 0);
++        keepCheatBuff(pPartyBuffs[PARTY_BUFF_HASTE], 0);
++        pPartyBuffs[PARTY_BUFF_HASTE].isGM = true; // Marks the cheat's haste, it wears off without weakness.
+         keepCheatBuff(pPartyBuffs[PARTY_BUFF_IMMOLATION], 10); // Burns only enemies under the cheat, see immolationAffectedActors.
+         for (PartyBuff resist : {PARTY_BUFF_RESIST_FIRE, PARTY_BUFF_RESIST_AIR, PARTY_BUFF_RESIST_WATER, PARTY_BUFF_RESIST_EARTH,
+                                  PARTY_BUFF_RESIST_MIND, PARTY_BUFF_RESIST_BODY})

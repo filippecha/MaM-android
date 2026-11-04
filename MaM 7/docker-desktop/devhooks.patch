@@ -1,16 +1,18 @@
 --- a/src/Application/Game.cpp	2026-09-29 22:31:46.710621100 +0200
 +++ b/src/Application/Game.cpp	2026-09-29 22:31:46.897114500 +0200
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,11 @@
  #include "Game.h"
  
  #include <algorithm>
 +#include <cstdio>
 +#include <cstdlib>
 +#include "Engine/Tables/DecorationTable.h"
++#include "Engine/Graphics/Collisions.h"
++#include <cmath>
  #include <array>
  #include <cassert>
  #include <optional>
-@@ -1629,6 +1632,81 @@
+@@ -1629,6 +1634,119 @@
          do {
              MessageLoopWithWait();
  
@@ -80,8 +82,46 @@
 +                }
 +                if (const char *devEvent = std::getenv("OE_DEV_EVENT"); devEvent && *devEvent && devHookFrames == 240)
 +                    eventProcessor(std::atoi(devEvent), Pid(), 1);
-+                if (const char *devChest = std::getenv("OE_DEV_CHEST"); devChest && *devChest && devHookFrames == 240)
++                if (const char *devChest = std::getenv("OE_DEV_CHEST"); devChest && *devChest && (devHookFrames == 240 || devHookFrames == 330))
 +                    Chest::open(std::atoi(devChest), Pid());
++                if (std::getenv("OE_DEV_CHEAT") && devHookFrames == 60)
++                    cheatImmortal = true;
++                if (const char *devItems = std::getenv("OE_DEV_ITEMS"); devItems && *devItems && devHookFrames == 60)
++                    for (const char *s = devItems; *s; s += (*s == ','))
++                        pParty->pCharacters[0].inventory.tryAdd(Item(static_cast<ItemId>(std::strtol(s, const_cast<char **>(&s), 10))));
++                if (const char *devScroll = std::getenv("OE_DEV_SCROLL"); devScroll && *devScroll && devHookFrames == 90) {
++                    void CreateMsgScrollWindow(ItemId mscroll_id);
++                    CreateMsgScrollWindow(static_cast<ItemId>(std::atoi(devScroll)));
++                }
++                // OE_DEV_GEOM=1 writes every face of the indoor map with its vertices to /out/geom.txt (current door positions).
++                if (std::getenv("OE_DEV_GEOM") && devHookFrames % 300 == 150 && uCurrentlyLoadedLevelType == LEVEL_INDOOR) {
++                    MM_WARNING("Dev: geom dump frame {}", devHookFrames);
++                    if (FILE *f = std::fopen("/out/geom.txt", "w")) {
++                        for (const BLVFace &face : pIndoor->faces) {
++                            std::fprintf(f, "F %d %d %d %d %x %s", face.faceId, std::to_underlying(face.polygonType), face.sectorId, face.backSectorId, static_cast<uint32_t>(face.attributes), face.texture ? face.texture->name().c_str() : "-");
++                            for (int k = 0; k < face.numVertices; k++)
++                                std::fprintf(f, " %g,%g,%g", pIndoor->vertices[face.vertexIds[k]].x, pIndoor->vertices[face.vertexIds[k]].y, pIndoor->vertices[face.vertexIds[k]].z);
++                            std::fprintf(f, "\n");
++                        }
++                        for (const LevelDecoration &deco : pLevelDecorations)
++                            std::fprintf(f, "D %s %g %g %g\n", pDecorationTable->decoration(deco.uDecorationDescID)->internalName.c_str(), deco.vPosition.x, deco.vPosition.y, deco.vPosition.z);
++                        for (const SpriteObject &obj : pSpriteObjects)
++                            std::fprintf(f, "O %d %g %g %g\n", std::to_underlying(obj.containing_item.itemId), obj.vPosition.x, obj.vPosition.y, obj.vPosition.z);
++                        std::fclose(f);
++                    }
++                }
++                // OE_DEV_PROBE=1 logs every frame the last collision and the floor height along the view direction.
++                if (std::getenv("OE_DEV_PROBE") && uCurrentlyLoadedLevelType == LEVEL_INDOOR && devHookFrames > 400) {
++                    std::string probe;
++                    for (int d = 0; d <= 64; d += 8) {
++                        int sector = pBLVRenderParams->uPartySectorID, face = 0;
++                        Vec3f at = pParty->pos + Vec3f(std::cos(pParty->_viewYaw * 2 * 3.14159265f / 2048) * d, std::sin(pParty->_viewYaw * 2 * 3.14159265f / 2048) * d, pParty->radius);
++                        float z = GetIndoorFloorZ(at, &sector, &face);
++                        probe += fmt::format(" {}:{}/s{}/f{}", d, z, sector, face);
++                    }
++                    if (collision_state.pid.type() == OBJECT_Decoration) { const DecorationData *dd = pDecorationTable->decoration(pLevelDecorations[collision_state.pid.id()].uDecorationDescID); MM_WARNING("Dev: probe deco {} radius {} height {} movethrough {} at {} {} {}", dd->internalName, dd->uRadius, dd->uDecorationHeight, dd->canMoveThrough(), pLevelDecorations[collision_state.pid.id()].vPosition.x, pLevelDecorations[collision_state.pid.id()].vPosition.y, pLevelDecorations[collision_state.pid.id()].vPosition.z); }
++                    MM_WARNING("Dev: probe party {} {} {} sector {} hit {} {}{}", pParty->pos.x, pParty->pos.y, pParty->pos.z, pBLVRenderParams->uPartySectorID, std::to_underlying(collision_state.pid.type()), collision_state.pid.id(), probe);
++                }
 +                if (std::getenv("OE_DEV_ACTORS") && devHookFrames % 120 == 0)
 +                    for (const Actor &actor : pActors)
 +                        MM_WARNING("Dev: actor {} monster {} group {} attrs {:x} ai {} hp {} pos {} {} {}", actor.id, std::to_underlying(actor.monsterInfo.id), actor.group, static_cast<uint32_t>(actor.attributes), std::to_underlying(actor.aiState), actor.hp, actor.pos.x, actor.pos.y, actor.pos.z);

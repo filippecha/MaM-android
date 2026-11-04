@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 #include <map>
+#include <vector>
 #include <string>
 #include <tuple>
 
@@ -250,6 +251,32 @@ void OpenGLRenderer::BeginLines2D() {
 void OpenGLRenderer::EndLines2D() {
     if (_lineVertices.empty()) return;
 
+    // GL_LINES are one framebuffer pixel wide whatever the scale, the minimap would turn thin and pale. With a scaled
+    // framebuffer every line becomes a strip one logical pixel wide, centred on the pixels it joins.
+    GLenum mode = GL_LINES;
+    if (_renderScale > 1) {
+        std::vector<LineVertex> strips;
+        strips.reserve(_lineVertices.size() * 3);
+        for (size_t i = 0; i + 1 < _lineVertices.size(); i += 2) {
+            const LineVertex &a = _lineVertices[i];
+            const LineVertex &b = _lineVertices[i + 1];
+            Vec2f pa(a.pos.x + 0.5f, a.pos.y + 0.5f), pb(b.pos.x + 0.5f, b.pos.y + 0.5f);
+            Vec2f d = pb - pa;
+            float len = std::sqrt(d.x * d.x + d.y * d.y);
+            Vec2f along = len < 0.001f ? Vec2f(0.5f, 0) : Vec2f(d.x / len * 0.5f, d.y / len * 0.5f);
+            Vec2f side(-along.y, along.x);
+            Vec2f corners[4] = {pa - along + side, pa - along - side, pb + along - side, pb + along + side};
+            const Colorf *colors[4] = {&a.color, &a.color, &b.color, &b.color};
+            for (int k : {0, 1, 2, 0, 2, 3}) {
+                LineVertex &v = strips.emplace_back();
+                v.pos = corners[k];
+                v.color = *colors[k];
+            }
+        }
+        _lineVertices = std::move(strips);
+        mode = GL_TRIANGLES;
+    }
+
     _lineBuffer.update(_lineVertices);
     _lineBuffer.bind();
 
@@ -260,7 +287,7 @@ void OpenGLRenderer::EndLines2D() {
     uniforms.view = viewmat;
     uniforms.submit(lineshader);
 
-    glDrawArrays(GL_LINES, 0, _lineVertices.size());
+    glDrawArrays(mode, 0, _lineVertices.size());
     drawcalls++;
 
     lineshader.unuse();
@@ -1000,7 +1027,7 @@ void OpenGLRenderer::DrawOutdoorTerrain() {
 
         // reserve first 7 layers for water tiles in unit 0
         auto wtrtexture = this->hd_water_tile_anim[0];
-        terraintexturesizes[0] = wtrtexture->width();
+        terraintexturesizes[0] = wtrtexture->rgba().width();
 
         for (int buff = 0; buff < 7; buff++) {
             std::string container_name = fmt::format("HDWTR{:03}", buff);
@@ -1031,7 +1058,7 @@ void OpenGLRenderer::DrawOutdoorTerrain() {
                 } else {
                     // else need to add it
                     auto thistexture = assets->getBitmap(tile.textureName, tile.flags & TILE_GENERATED_TRANSITION);
-                    int width = thistexture->width();
+                    int width = thistexture->rgba().width();
                     // check size to see what unit it needs
                     int i;
                     for (i = 0; i < 8; i++) {
@@ -2260,8 +2287,8 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
         auto wtrtexture = this->hd_water_tile_anim[0];
         //terraintexmap.insert(std::make_pair("wtrtyl", terraintexmap.size()));
         //numterraintexloaded[0]++;
-        outbuildtexturewidths[0] = wtrtexture->width();
-        outbuildtextureheights[0] = wtrtexture->height();
+        outbuildtexturewidths[0] = wtrtexture->rgba().width();
+        outbuildtextureheights[0] = wtrtexture->rgba().height();
 
         for (int buff = 0; buff < 7; buff++) {
             std::string container_name = fmt::format("HDWTR{:03}", buff);
@@ -2300,6 +2327,7 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
 
                         int texunit = 0;
                         int texlayer = 0;
+                        int texscale = 1;
                         int attribflags = 0;
 
                         if (face.attributes & FACE_IsFluid)
@@ -2329,15 +2357,18 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
                                 int unitlayer = mapiter->second;
                                 texlayer = unitlayer & 0xFF;
                                 texunit = (unitlayer & 0xFF00) >> 8;
+                                texscale = (unitlayer >> 16) & 7;
                             } else if (texname == "wtrtyl") {
                                 // water tile
+                                texscale = assets->getBitmap("wtrtyl")->scale();
                                 texunit = 0;
                                 texlayer = 0;
                             } else {
                                 // else need to add it
                                 auto thistexture = assets->getBitmap(texname);
-                                int width = thistexture->width();
-                                int height = thistexture->height();
+                                int width = thistexture->rgba().width();
+                                int height = thistexture->rgba().height();
+                                texscale = thistexture->scale();
                                 // check size to see what unit it needs
                                 int i;
                                 for (i = 0; i < 16; i++) {
@@ -2357,8 +2388,8 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
                                     texunit = i;
                                     texlayer = numoutbuildtexloaded[i];
 
-                                    // encode unit and layer together
-                                    int encode = (texunit << 8) | texlayer;
+                                    // encode unit, layer and texture scale together
+                                    int encode = (texscale << 16) | (texunit << 8) | texlayer;
 
                                     if (numoutbuildtexloaded[i] < 256) {
                                         // intsert into tex map
@@ -2383,6 +2414,7 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
 
                         face.texunit = texunit;
                         face.texlayer = texlayer;
+                        face.texscale = texscale;
                     }
                 }
             }
@@ -2524,6 +2556,7 @@ void OpenGLRenderer::DrawOutdoorBuildings() {
                                     // 123, 134, 145, 156..
 
                                     // copy first
+                                    attribflags |= std::clamp(face.texscale, 1, 7) << 20;
                                     ShaderVertex &v0 = _outbuildVertices[texunit].emplace_back();
                                     v0.pos = model.vertices[face.vertexIds[0]];
                                     v0.texuv = Vec2f(face.textureUs[0] + face.textureDeltaU,
@@ -2777,8 +2810,8 @@ void OpenGLRenderer::DrawIndoorFaces() {
             auto wtrtexture = this->hd_water_tile_anim[0];
             //terraintexmap.insert(std::make_pair("wtrtyl", terraintexmap.size()));
             //numterraintexloaded[0]++;
-            bsptexturewidths[0] = wtrtexture->width();
-            bsptextureheights[0] = wtrtexture->height();
+            bsptexturewidths[0] = wtrtexture->rgba().width();
+            bsptextureheights[0] = wtrtexture->rgba().height();
 
             for (int buff = 0; buff < 7; buff++) {
                 std::string container_name = fmt::format("HDWTR{:03}", buff);
@@ -2810,6 +2843,7 @@ void OpenGLRenderer::DrawIndoorFaces() {
 
                 int texunit = 0;
                 int texlayer = 0;
+                int texscale = 1;
 
                 // loop while running down animlength with frame animtimes
                 do {
@@ -2821,15 +2855,18 @@ void OpenGLRenderer::DrawIndoorFaces() {
                         // TODO(pskelton): make this a pair/struct rather than encoding
                         texlayer = unitlayer & 0xFF;
                         texunit = (unitlayer & 0xFF00) >> 8;
+                        texscale = (unitlayer >> 16) & 7;
                     } else if (texname == "wtrtyl") {
                         // water tile
+                        texscale = assets->getBitmap("wtrtyl")->scale();
                         texunit = 0;
                         texlayer = 0;
                     } else {
                         // else need to add it
                         auto thistexture = assets->getBitmap(texname);
-                        int width = thistexture->width();
-                        int height = thistexture->height();
+                        int width = thistexture->rgba().width();
+                        int height = thistexture->rgba().height();
+                        texscale = thistexture->scale();
                         // check size to see what unit it needs
                         int i;
                         for (i = 0; i < 16; i++) {
@@ -2849,8 +2886,8 @@ void OpenGLRenderer::DrawIndoorFaces() {
                             texunit = i;
                             texlayer = bsptexloaded[i];
 
-                            // encode unit and layer together
-                            int encode = (texunit << 8) | texlayer;
+                            // encode unit, layer and texture scale together
+                            int encode = (texscale << 16) | (texunit << 8) | texlayer;
 
                             if (bsptexloaded[i] < 256) {
                                 // intsert into tex map
@@ -2875,6 +2912,7 @@ void OpenGLRenderer::DrawIndoorFaces() {
 
                 face->texunit = texunit;
                 face->texlayer = texlayer;
+                face->texscale = texscale;
             }
 
             for (int l = 0; l < 16; l++) {
@@ -3013,6 +3051,7 @@ void OpenGLRenderer::DrawIndoorFaces() {
                     // 123, 134, 145, 156..
 
                     // copy first
+                    attribflags |= std::clamp(face->texscale, 1, 7) << 20;
                     ShaderVertex &v0 = _bspVertices[texunit].emplace_back();
                     v0.pos = pIndoor->vertices[face->vertexIds[0]];
                     v0.texuv = Vec2f(face->textureUs[0] + face->textureDeltaU,
@@ -3700,6 +3739,9 @@ void OpenGLRenderer::DrawTwodVerts() {
         // set texture
         GLfloat thistex = _twodVertices[offset].texid;
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(_twodVertices[offset].texid));
+        // UI images are drawn once, not tiled: with GL_REPEAT a magnified image blends its opposite edge into its border.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         if (_twodVertices[offset].paletteid) {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);

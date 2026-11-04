@@ -42,13 +42,20 @@ Tenhle prompt proto nestaví engine od nuly, ale sestaví APK z hotové upraven�
 - **Git** a **Python 3**.
 - Čas: první build včetně stahování závislostí asi 30–60 minut, další pár minut.
 
+**HD grafika (volitelné)**
+- Engine kreslí v rozlišení displeje vždy. Ostré textury a obrázky UI ale potřebují balík `gamedata\MM8\hd`,
+  který se vyrábí AI zvětšením z tvých dat (v repozitáři není, jsou to odvozená herní data).
+- Na výrobu se hodí grafická karta NVIDIA s aspoň 8 GB paměti (na RTX 5070 asi 20 minut). Na procesoru to jde,
+  ale trvá to hodiny. Balík má asi 490 MB a o tolik je větší i APK.
+- Bez balíku hra funguje stejně, jen s původními texturami.
+
 **Testování (volitelné, ale doporučené)**
 - Android Studio s emulátorem. Emulátor umí jen OpenGL ES 3.1, proto se pro něj staví zvláštní testovací APK.
 - Emulátor potřebuje asi 3 GB volné paměti. Když Docker a WSL zabírají skoro všechno, nespustí se.
 
 **Telefon**
 - Android 7+ s 64bit ARM procesorem (arm64) a **OpenGL ES 3.2**.
-- Asi **1,5 GB volného místa** (APK ~660 MB + rozbalená data).
+- Asi **1,5 GB volného místa** (APK ~660 MB + rozbalená data), s HD grafikou asi **2,5 GB** (APK ~1,16 GB).
 - Povolená instalace z neznámých zdrojů.
 
 **Synchronizace uložených her (volitelné)**
@@ -109,6 +116,19 @@ KROK 1: DOCKER IMAGE
   přejmenuj (ne mazat) složky %LOCALAPPDATA%\Docker\run a %LOCALAPPDATA%\docker-secrets-engine,
   když Docker neběží. Když je Docker ručně pozastavený, neobcházej to a řekni mi to.
 
+KROK 1b: HD GRAFIKA (jen když ji chci, zeptej se mě)
+- Engine už HD umí (vykreslování v rozlišení displeje, HD textury a UI, Scale2x pro nestvůry a písmo).
+  Popis je v "MaM 8\README.md" a "MaM 7\README.md", sekce „HD grafika“.
+- Balík vyrob nástroji z "MaM 7\tools\hd-upscale" přesně podle sekce „HD grafika“ v "MaM 8\README.md":
+  extract.py na bitmaps.lod, extract_icons.py na icons.lod a EnglishD.lod (EnglishD má přednost),
+  zvětšení modelem Remacri v Docker image z "MaM 7\tools\hd-upscale\Dockerfile.gpu" (docker run --gpus all,
+  pro textury PAD_MODE=wrap, pro UI PAD_MODE=reflect) a pack.py do "MaM 8\gamedata\MM8\hd\bitmaps"
+  a "...\hd\icons". Mezivýsledky dej do "MaM 8\devout", ne jinam.
+- Nejdřív ověř, že Docker vidí grafickou kartu (docker run --rm --gpus all ... nvidia-smi). Když ne,
+  řekni mi, kolik hodin by to trvalo na procesoru, a počkej na moje rozhodnutí.
+- Ověř na PC (desktopový build, tools/dev.sh s OE_DEV_SCREEN=1280x960), že textury venku i v podzemí
+  mají správné měřítko a že sedí panáček postavy a pravý panel v rozhovoru.
+
 KROK 2: BUILD APK PRO TELEFON (PowerShell ve složce "MaM 8"):
   docker run --rm -v "${PWD}\OpenEnroth:/src:ro" -v "${PWD}\gamedata:/gamedata:ro" -v "${PWD}\out-android:/out" -v "${PWD}\docker-android:/dd:ro" -v oe8_work:/work -v oe_gradle:/root/.gradle openenroth-android bash -c "sed 's/\r$//' /dd/build.sh > /tmp/b.sh && bash /tmp/b.sh"
 - Pozor: "gamedata" se mountuje jako /gamedata a MUSÍ v ní být podsložka MM8. Se špatným mountem
@@ -153,7 +173,7 @@ KROK 4: TEST NA EMULÁTORU (když mám Android Studio)
 VÝSTUP:
 - out-android\MaM8.apk a keystore tamtéž.
 - Na konci mi napiš: cestu k APK, jak ho dostat do telefonu a nainstalovat (neznámé zdroje,
-  ~1,5 GB místa, první spuštění rozbaluje data), co je ověřené a co ne (skutečný telefon s ES 3.2
+  ~1,5 GB místa, s HD ~2,5 GB, první spuštění rozbaluje data), co je ověřené a co ne (skutečný telefon s ES 3.2
   jsi netestoval), co jsi změnil na disku (složky, Docker image a volumes) a že APK nesmím šířit.
 ```
 
@@ -237,6 +257,11 @@ Pak je potřeba MM8 do OpenEnroth dopsat. Není to práce na jeden prompt, ale n
 - **Po částech:** načtení dat → hlavní menu → tvorba postavy → mapa a pohyb → domy a rozhovory →
   najímání družiny → kouzla a rasové schopnosti → knihy a ukládání → artefakty, kořist, Arcomage,
   konec hry. Po každé části kontrola stylu a unit testy (`docker-desktop/test.sh`) a commit.
+- **HD grafika:** převzatá z MaM 7 (`MaM 7\nase-upravy-13-hd-grafika.patch` přes `git apply --reject`,
+  pár odmítnutých částí doplnit ručně). Potom projdi všechen MM8 kód, který čte pixely obrázků (`->rgba()`)
+  nebo z nich skládá nové (`GraphicsImage::Create`). Zvětšený obrázek má `scale()` pixelů na logický pixel
+  a nový obrázek musí dostat stejné `scale`, jinak se vykreslí k× větší. V MM8 to byl pravý panel
+  rozhovorů (`GUIWindow.cpp`) a otočené zbraně panáčka (`Mm8Paperdoll.cpp`).
 - **Android build je přísnější:** APK kompiluje clang z NDK, desktop gcc. Clang navíc odmítne třeba
   zúžení čísla v `{}` (unsigned → int). Po větší změně proto sestav i APK, ne jen desktopovou verzi.
 

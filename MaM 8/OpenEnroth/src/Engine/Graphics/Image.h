@@ -14,6 +14,8 @@ class ImageLoader;
 class GraphicsImage {
  public:
     static GraphicsImage *Create(RgbaImage image);
+    /** Ours: an image whose texture has `scale` pixels per logical pixel. */
+    static GraphicsImage *Create(RgbaImage image, int scale);
     static GraphicsImage *Create(int width, int height);
     static GraphicsImage *Create(Sizei size);
     static GraphicsImage *Create(std::unique_ptr<ImageLoader> loader);
@@ -23,6 +25,7 @@ class GraphicsImage {
     Sizei size();
 
     RgbaImage &rgba();
+    int scale() const { return _scale; }  // Texture pixels per logical pixel.
 
     const std::string &name();
 
@@ -43,6 +46,7 @@ class GraphicsImage {
     std::unique_ptr<ImageLoader> _loader;
     RgbaImage _rgba;
     TextureRenderId _renderId;
+    int _scale = 1;
 };
 
 struct GraphicsImageDeleter {

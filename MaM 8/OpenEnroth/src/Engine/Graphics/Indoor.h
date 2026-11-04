@@ -168,6 +168,7 @@ struct BLVFace {
     int animationId = 0; // Index into pTextureFrameTable for animated faces.
     int texunit = -1;
     int texlayer = -1;
+    int texscale = 1;  // Texture pixels per pixel of the face UVs, HD textures have more.
 
     int sectorId = 0;
     int backSectorId = 0;

@@ -19,6 +19,11 @@ void initializeQuests(const Blob &quests) {
     for (std::string_view line : split(quests.str()).by("\r\n").drop(1).skip("")) {
         std::array<std::string_view, 2> tokens = split(line).by('\t');
         QuestBit qbit = static_cast<QuestBit>(fromString<int>(tokens[0]));
-        pQuestTable[qbit] = unquote(tokens[1]);
+        std::string text = unquote(tokens[1]);
+        // Ours: the unused bits 271 and up have the text "0", the quest book showed it as a quest "0" once a script
+        // set one of them. They stay empty, so the book leaves them out.
+        if (text == "0")
+            continue;
+        pQuestTable[qbit] = text;
     }
 }

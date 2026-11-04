@@ -2,16 +2,20 @@ cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
 
 set(LIBRARY_IMAGE_SOURCES
         ImageFunctions.cpp
-        Pcx.cpp)
+        Jpeg.cpp
+        Pcx.cpp
+        PixelScale.cpp)
 
 set(LIBRARY_IMAGE_HEADERS
         Image.h
         ImageFunctions.h
+        Jpeg.h
         Palette.h
         Pcx.h
+        PixelScale.h
         Png.h
         Png.cpp)
 
 add_library(library_image STATIC ${LIBRARY_IMAGE_SOURCES} ${LIBRARY_IMAGE_HEADERS})
-target_link_libraries(library_image PUBLIC library_color library_geometry utility PRIVATE PNG::PNG)
+target_link_libraries(library_image PUBLIC library_color library_geometry utility PRIVATE PNG::PNG stb)
 target_check_style(library_image)

@@ -19,9 +19,11 @@ int spriteScale();
  * @param originalWidth                 Size of the texture in bitmaps.lod.
  * @param originalHeight
  * @param desaturate                    Apply the same saturation and lightness adjustment as the loaded palettes get.
+ * @param[out] scaleOut                 Texture pixels per pixel of the original, if given.
  * @return                              The replacement, or nothing if there is none or it is switched off.
  */
-std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate);
+std::optional<RgbaImage> loadHdBitmap(std::string_view name, int originalWidth, int originalHeight, bool desaturate,
+                                      int *scaleOut = nullptr);
 
 /**
  * Ours: `hd/icons/<name>.png` or `.jpg` replaces the colours of a UI image at a whole multiple of its size. The

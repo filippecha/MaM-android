@@ -22,7 +22,8 @@ class AssetsManager {
 
     GraphicsImage *getImage_ColorKey(std::string_view name, Color colorkey = colorTable.TealMask);
     GraphicsImage *getImage_Paletted(std::string_view name);
-    GraphicsImage *getImage_Solid(std::string_view name);
+    /** @param allowHd                   Ours: false keeps the original size even if hd/icons has a replacement. */
+    GraphicsImage *getImage_Solid(std::string_view name, bool allowHd = true);
     GraphicsImage *getImage_Alpha(std::string_view name);
     GraphicsImage *getImage_Buff(std::string_view name);
 

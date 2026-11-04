@@ -1,5 +1,6 @@
 #include "ImageLoader.h"
 
+#include <algorithm>
 #include <optional>
 #include <unordered_set>
 #include <string_view>
@@ -100,6 +101,8 @@ bool Image16bit_LOD_Loader::Load(RgbaImage *rgbaImage) {
     }
 
     *rgbaImage = makeRgbaImage(tex->image, palette);
+    if (allowHd)
+        applyHdIcon(resource_name, rgbaImage, &_scale);
 
     return true;
 }
@@ -270,7 +273,7 @@ bool Bitmaps_LOD_Loader::Load(RgbaImage *rgbaImage) {
         }
     }
 
-    if (std::optional<RgbaImage> hd = loadHdBitmap(this->resource_name, w, h, true))
+    if (std::optional<RgbaImage> hd = loadHdBitmap(this->resource_name, w, h, true, &_scale))
         *rgbaImage = std::move(*hd);
 
     return true;
@@ -279,6 +282,7 @@ bool Bitmaps_LOD_Loader::Load(RgbaImage *rgbaImage) {
 bool Bitmaps_GEN_Loader::Load(RgbaImage *rgbaImage) {
     pTileGenerator->ensureTile(this->resource_name);
     *rgbaImage = png::decode(ufs->read(this->resource_name));
+    _scale = std::max(1, rgbaImage->width() / 128);  // Generated from HD tiles the tile is bigger than the 128 px of the data.
 
     // Desaturate.
     float xs = engine->config->graphics.Saturation.value();

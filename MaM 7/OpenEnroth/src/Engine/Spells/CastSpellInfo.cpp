@@ -1415,14 +1415,14 @@ void CastSpellInfoHelpers::castSpell() {
                         // break items with low value
                         if ((spell_item_to_enchant->GetValue() < 450 && !isWeapon(this_equip_type)) ||  // not weapons
                                 (spell_item_to_enchant->GetValue() < 250 && isWeapon(this_equip_type))) {  // weapons
-                            if (!(spell_item_to_enchant->flags & ITEM_HARDENED)) {
+                            if (!(spell_item_to_enchant->flags & ITEM_HARDENED) && !cheatImmortal) {  // Ours: cheat.
                                 spell_item_to_enchant->SetBroken();
                             }
                             item_not_broken = false;
                         } else {
                             // random item break
                             if (rnd >= success_chance_percent) {
-                                if (!(spell_item_to_enchant->flags & ITEM_HARDENED)) {
+                                if (!(spell_item_to_enchant->flags & ITEM_HARDENED) && !cheatImmortal) {  // Ours: cheat.
                                     spell_item_to_enchant->SetBroken();
                                 }
                             } else {

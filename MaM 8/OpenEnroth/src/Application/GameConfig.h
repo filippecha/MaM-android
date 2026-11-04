@@ -479,6 +479,19 @@ class GameConfig : public Config {
         Int RenderWidth = {this, "render_width", 640, &ValidateRenderWidth, "Internal rendered resolution width"};
         Int RenderHeight = {this, "render_height", 480, &ValidateRenderHeight, "Internal rendered resolution height"};
 
+        // Ours. The framebuffer is render_width x render_height times this, the 3D view gets the extra pixels and the
+        // 2D layer is scaled up by the GPU. 0 picks the biggest whole number that fits the window.
+        Int RenderScale = {this, "render_scale", 0, &ValidateRenderScale,
+                           "Framebuffer scale: 0 - the smallest that covers the window, 1 - 4 - fixed."};
+
+        // Ours. Sprites are pixel art, Scale2x/Scale3x on their palette indices rounds the edges.
+        Int SpriteScale = {this, "sprite_scale", 0, &ValidateSpriteScale,
+                           "Pixel-art scaling of sprites: 0 - follow render_scale, 1 - off, 2 - Scale2x, 3 - Scale3x."};
+
+        // Ours. The pack in hd/bitmaps holds the textures 4x, this is how much of it stays in memory.
+        Int HdTextures = {this, "hd_textures", -1,
+                          "Replacement textures from hd/bitmaps: 0 - off, 2 - half of the pack's size, 4 - full size, -1 - by device memory."};
+
         // TODO(captainurist): #enum, will need to support cycleIncrement for enums entries.
         Int RenderFilter = {this, "render_filter", 2, &ValidateRenderFilter,
                             "Filtering method when scaling rendered framebuffer to window dimensions if they differ."
@@ -509,6 +522,12 @@ class GameConfig : public Config {
                 return 0;
 
             return distance;
+        }
+        static int ValidateRenderScale(int scale) {
+            return std::clamp(scale, 0, 4);
+        }
+        static int ValidateSpriteScale(int scale) {
+            return std::clamp(scale, 0, 3);
         }
         static int ValidateRenderWidth(int dimension) {
             if (dimension < 640)

@@ -27,12 +27,36 @@ Rozlišení hry `isMm8()` (`Utility/GameVariant.h`), podle dat se pozná samo. H
 - MM8 vzhled oken (herní obrazovka, panáček postavy `GUI/UI/Mm8Paperdoll`, knihy, domy, hostinec),
 - MM8 zvuky (jiná čísla než MM7), Arcomage v hospodách 107–117, certifikát na konci hry.
 
+## HD grafika
+
+Stejná jako v MaM 7 (popis vrstev v `../MaM 7/README.md`, sekce „HD grafika“), jedna verze bez přepínače:
+
+1. Vykreslování v rozlišení displeje (`graphics.render_scale`, framebuffer k× 640×480, UI a myš zůstávají v logických souřadnicích).
+2. HD textury stěn, terénu a oblohy: 1483 textur z `bitmaps.lod` zvětšených 4× modelem Remacri v `gamedata/MM8/hd/bitmaps/` (JPEG, 24 průhledných pobřežních dlaždic PNG). Vynechané jsou palety, nápisy obchodů (`sg*`) a písmena hádanek (`alphanum*`), upscaler si vymýšlí písmena.
+3. HD UI: 4119 obrázků z `icons.lod` a českého `EnglishD.lod` (ten má přednost, stejně jako v enginu) v `gamedata/MM8/hd/icons/`.
+4. Sprity a písmo zvětšené Scale2x po paletových indexech.
+
+Balík má 489 MB. Kód přišel z MaM 7 (`../MaM 7/nase-upravy-13-hd-grafika.patch` a pozdější opravy). Navíc MM8 skládá pravý panel rozhovorů z rámečku minimapy a okraje (`GUIWindow.cpp`) a otáčí ikony zbraní pro panáčka (`Mm8Paperdoll.cpp`, `rotatedIcon`). Obojí pracuje s pixely, proto počítá se `scale()` obrázků.
+
+Výroba balíku nástroji z `../MaM 7/tools/hd-upscale/` (umí i formát MM8, `EnglishD.lod` má 64znaková jména):
+
+```
+python "../MaM 7/tools/hd-upscale/extract.py" gamedata/MM8/Data/bitmaps.lod devout/hd8/orig
+python "../MaM 7/tools/hd-upscale/extract_icons.py" gamedata/MM8/Data/icons.lod devout/hd8icons/orig
+python "../MaM 7/tools/hd-upscale/extract_icons.py" gamedata/MM8/Data/EnglishD.lod devout/hd8icons/orig-en
+```
+
+Potom `orig-en/*` zkopírovat přes `orig/`, zvětšit (`docker run --rm --gpus all -v <složka>:/work -v "<MaM 7>/tools/hd-upscale:/tools:ro" -v mm7_upscale_weights:/work/weights mm7-upscale-gpu python /tools/upscale.py remacri`, pro UI s `-e PAD_MODE=reflect`, na RTX 5070 asi 20 minut) a zabalit `pack.py devout/hd8/hd-remacri gamedata/MM8/hd/bitmaps devout/hd8/orig` a `pack.py devout/hd8icons/hd-remacri gamedata/MM8/hd/icons`.
+
+Ověřeno v PC smyčce v 1280×960 (`OE_DEV_SCREEN=1280x960 OE_DEV_INI="[window];width = 1280;height = 960"`): hlavní menu, tvorba postavy, Dagger Wound venku, Opuštěný chrám (d05) s minimapou a knihou map, rozhovor, kovárna s regály, inventář a panáček s otočenou zbraní v druhé ruce.
+
 ## Vývoj na PC (Docker)
 
 - `bash tools/dev.sh <sekundy> "<kroky xdotool>"` přeloží desktopovou verzi a spustí hru s `gamedata/MM8`, snímky a log jsou v `devout/`. Proměnné pro testy: `OE_DEV_MAP`, `OE_DEV_HOUSE`, `OE_DEV_EVENT`, `OE_DEV_POS`, `OE_DEV_TALK`, `OE_DEV_ITEMS`, `OE_DEV_OFFHAND`, `OE_DEV_SPELL`, `OE_DEV_SPELL_SWEEP`, `OE_DEV_ROSTER`, `OE_DEV_MAP_TOUR`, `OE_DEV_DECOR` a další, popis v `Application/Game.cpp`. Nová hra: kroky v `tools/newgame-steps.txt`.
 - `bash tools/crash.sh` spustí hru pod gdb a vypíše backtrace.
 - `tools/lod.py` vypíše a rozbalí soubory z LOD archivů, `tools/pe.py` čte data z `MM8-Rel.exe`.
 - Kontrola stylu a unit testy: `docker-desktop/test.sh` (výsledek `devout/test.log`).
+- `OE_DEV_SCREEN=1280x960` a `OE_DEV_INI="[window];width = 1280;height = 960"` spustí hru ve větším okně (HD), `;` v `OE_DEV_INI` odděluje řádky `openenroth.ini`.
 
 ## Build APK (PowerShell, z této složky)
 
@@ -42,7 +66,7 @@ Herní data nejsou v repozitáři: zkopíruj je z vlastní instalace do `gamedat
 docker run --rm -v "${PWD}\OpenEnroth:/src:ro" -v "${PWD}\gamedata:/gamedata:ro" -v "${PWD}\out-android:/out" -v "${PWD}\docker-android:/dd:ro" -v oe8_work:/work -v oe_gradle:/root/.gradle openenroth-android bash -c "sed 's/\r$//' /dd/build.sh > /tmp/b.sh && bash /tmp/b.sh"
 ```
 
-Výsledek: `out-android/MaM8.apk` (arm64, OpenGL ES 3.2, asi 660 MB). Na telefonu potřebuje asi 1,5 GB volného místa.
+Výsledek: `out-android/MaM8.apk` (arm64, OpenGL ES 3.2, asi 1,16 GB, z toho 490 MB HD balík). Na telefonu potřebuje asi 2,5 GB volného místa.
 
 Pro emulátor (umí jen OpenGL ES 3.1): přidat `-e GITHUBARCH=x86_64`, výstup do `out-android-emu` s `prebuild.sh` z `..\MaM 7\out-emu` a volume `oe8emu_work`.
 

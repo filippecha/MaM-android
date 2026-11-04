@@ -1,15 +1,22 @@
 #include "MapBook.h"
 
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "Engine/AssetsManager.h"
 #include "Engine/Evt/Processor.h"
 #include "Engine/Graphics/Renderer/Renderer.h"
 #include "Engine/Graphics/Indoor.h"
+#include "Engine/Objects/Actor.h"
 #include "Engine/Objects/Decoration.h"
+#include "Engine/Objects/NPC.h"
+#include "Engine/Objects/ObjectList.h"
+#include "Engine/Objects/SpriteObject.h"
 #include "Engine/Graphics/Outdoor.h"
 #include "Engine/Graphics/Viewport.h"
 #include "Engine/Graphics/Image.h"
@@ -19,6 +26,7 @@
 #include "Engine/Engine.h"
 
 #include "GUI/GUIButton.h"
+#include "GUI/GUIWindow.h"
 #include "GUI/UI/UIGame.h"
 
 #include "Media/Audio/AudioPlayer.h"
@@ -26,6 +34,7 @@
 #include "Utility/Math/TrigLut.h"
 
 void DrawBook_Map_sub(int tl_x, int tl_y, int br_x, int br_y);
+static void drawWizardEyeMarkers(Vec2f center, Vec2i screenCenter);
 
 GraphicsImage *ui_book_map_background = nullptr;
 
@@ -247,6 +256,8 @@ void DrawBook_Map_sub(int tl_x, int tl_y, int br_x, int br_y) {
         }
     }
 
+    drawWizardEyeMarkers(center, screenCenter);
+
     // Direction arrow drawing
     int ArrowXPos = (pParty->pos.x - center.x) * viewparams->uMapBookMapZoom / 65536.0f + screenCenter.x - 3;
     int ArrowYPos = screenCenter.y - ((pParty->pos.y - center.y) * viewparams->uMapBookMapZoom / 65536.0f) - 3;
@@ -307,6 +318,98 @@ void DrawBook_Map_sub(int tl_x, int tl_y, int br_x, int br_y) {
         }
         render->EndLines2D();
     }
+}
+
+/**
+ * Ours: what Wizard Eye shows on the minimap, drawn over the whole map book but only where the party has explored.
+ * Novice shows creatures, expert adds items, master adds the clickable walls of indoor maps, same as the minimap.
+ *
+ * @param center                    World position in the middle of the map.
+ * @param screenCenter              Screen position of the middle of the map.
+ */
+static void drawWizardEyeMarkers(Vec2f center, Vec2i screenCenter) {
+    bool wizardEyeActive = pParty->wizardEyeActive();
+    Mastery wizardEyeMastery = pParty->wizardEyeSkillLevel();
+    if (CheckHiredNPCSpeciality(Cartographer)) {
+        wizardEyeActive = true;
+        wizardEyeMastery = wizardEyeMastery > MASTERY_EXPERT ? wizardEyeMastery : MASTERY_EXPERT;
+    }
+    if (engine->config->debug.WizardEye.value()) {
+        wizardEyeActive = true;
+        wizardEyeMastery = MASTERY_MASTER;
+    }
+    if (!wizardEyeActive)
+        return;
+
+    int zoom = viewparams->uMapBookMapZoom;
+    bool indoor = uCurrentlyLoadedLevelType == LEVEL_INDOOR;
+
+    std::vector<bool> seenSectors;
+    if (indoor) {
+        seenSectors.resize(pIndoor->sectors.size());
+        for (size_t i = 0; i < pIndoor->sectors.size(); i++) {
+            const BLVSector &sector = pIndoor->sectors[i];
+            auto seen = [](uint16_t faceId) { return static_cast<bool>(pIndoor->faces[faceId].attributes & FACE_SeenByParty); };
+            seenSectors[i] = std::ranges::any_of(sector.floorIds, seen) || std::ranges::any_of(sector.wallIds, seen);
+        }
+    }
+
+    auto explored = [&](const Vec3f &pos, int sectorId) {
+        if (indoor)
+            return sectorId > 0 && sectorId < static_cast<int>(seenSectors.size()) && seenSectors[sectorId];
+        int cellX = static_cast<int>(std::floor((pos.x + maxPartyAxisDistance) / 512.0f));
+        int cellY = static_cast<int>(std::floor((maxPartyAxisDistance - pos.y) / 512.0f));
+        return pOutdoor->IsMapCellPartiallyRevealed(cellX, cellY);
+    };
+
+    auto toScreen = [&](const Vec3f &pos) {
+        Vec2f mapPos = (pos.xy() - center) / 65536.0f;
+        mapPos.y = -mapPos.y;
+        return screenCenter + (mapPos * zoom).toInt();
+    };
+
+    auto drawSquare = [](Pointi pos, int radius, Color color) {
+        for (int dx = -radius; dx <= radius; dx++)
+            render->RasterLine2D(pos + Pointi(dx, -radius), pos + Pointi(dx, radius), color);
+    };
+
+    render->BeginLines2D();
+
+    if (indoor && wizardEyeMastery >= MASTERY_MASTER) {
+        for (const BLVMapOutline &outline : pIndoor->mapOutlines) {
+            const BLVFace &face1 = pIndoor->faces[outline.uFace1ID];
+            const BLVFace &face2 = pIndoor->faces[outline.uFace2ID];
+            if (!(outline.uFlags & 1) || !face1.Visible() || !face2.Visible())
+                continue;
+            if ((face1.Clickable() && face1.eventId) || (face2.Clickable() && face2.eventId))
+                render->RasterLine2D(toScreen(pIndoor->vertices[outline.uVertex1ID]),
+                                     toScreen(pIndoor->vertices[outline.uVertex2ID]), ui_game_minimap_outline_color);
+        }
+    }
+
+    if (wizardEyeMastery >= MASTERY_EXPERT) {
+        for (const SpriteObject &object : pSpriteObjects) {
+            if (object.spriteId == SPRITE_NULL || !object.uObjectDescID)
+                continue;
+            if (pObjectList->pObjects[object.uObjectDescID].uFlags & OBJECT_DESC_UNPICKABLE)
+                continue; // Projectiles and spell effects.
+            if (explored(object.vPosition, object.uSectorID))
+                drawSquare(toScreen(object.vPosition), 1, ui_game_minimap_treasure_color);
+        }
+    }
+
+    for (const Actor &actor : pActors) {
+        if (actor.aiState == Removed || actor.aiState == Disabled || !explored(actor.pos, actor.sectorId))
+            continue;
+        Color color = ui_game_minimap_actor_friendly_color;
+        if (actor.attributes & ACTOR_HOSTILE)
+            color = ui_game_minimap_actor_hostile_color;
+        if (actor.aiState == Dead)
+            color = ui_game_minimap_actor_corpse_color;
+        drawSquare(toScreen(actor.pos), zoom > 768 ? 2 : 1, color);
+    }
+
+    render->EndLines2D();
 }
 
 std::string GetMapBookHintText(int mouse_x, int mouse_y) {

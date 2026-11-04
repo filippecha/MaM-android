@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #include "Engine/Graphics/Renderer/Renderer.h"
 #include "Engine/Graphics/Image.h"
@@ -59,6 +60,25 @@ GUIWindow_Chest::GUIWindow_Chest(int chestId) : GUIWindow(WINDOW_Chest, {0, 0}, 
             pixel.g = pixel.g * (16 - coverage) / 16;
             pixel.b = pixel.b * (16 - coverage) / 16;
         }
+    }
+    // Ours: between this button (400..435) and the exit one (445..480) ten rows showed the dark bar of the main UI
+    // behind them. The texture grows by these rows, filled with the plain stone (or ice) of the plaque around its
+    // button: the bottom rows 31..34 and the top rows 0..4, both mirrored so that the joins stay smooth.
+    if (plaque.width() == 169 * s && plaque.height() == 35 * s) {
+        std::vector<int> fill;
+        for (int y = 35 * s - 1; y >= 31 * s; y--)
+            fill.push_back(y);
+        for (int y = 31 * s; y < 32 * s; y++)
+            fill.push_back(y);
+        for (int y = 5 * s - 1; y >= 0; y--)
+            fill.push_back(y);
+        RgbaImage tall = RgbaImage::uninitialized(plaque.width(), 35 * s + static_cast<int>(fill.size()));
+        for (int y = 0; y < tall.height(); y++) {
+            int from = y < 35 * s ? y : fill[y - 35 * s];
+            for (int x = 0; x < plaque.width(); x++)
+                tall[y][x] = plaque[from][x];
+        }
+        plaque = std::move(tall);
     }
     _takeAllTexture = GraphicsImage::Create(std::move(plaque), s);
     current_screen_type = SCREEN_CHEST;

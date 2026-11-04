@@ -151,6 +151,8 @@ class Renderer {
 
     virtual Sizei GetRenderDimensions() = 0;
     virtual Sizei GetPresentDimensions() = 0;
+    /** Ours: framebuffer pixels per logical pixel. */
+    virtual int renderScale() { return 1; }
     virtual Pointi MapToRender(Pointi position) = 0;
     virtual Pointi MapToPresent(Pointi position) = 0;
 

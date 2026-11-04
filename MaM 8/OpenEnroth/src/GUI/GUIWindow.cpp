@@ -1,5 +1,6 @@
 #include "GUI/GUIWindow.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 #include <sstream>
@@ -627,17 +628,20 @@ static void setMm6UserInterface() {
     game_ui_minimap_compass = assets->getImage_ColorKey("compass");
 
     // Dialogs draw this over the whole right panel.
-    RgbaImage panel = RgbaImage::solid(Color(), 172, 480);
+    int panelScale = std::max(game_ui_minimap_frame->scale(), game_ui_rightframe->scale());
+    RgbaImage panel = RgbaImage::solid(Color(), 172 * panelScale, 480 * panelScale);
     auto blit = [&](GraphicsImage *image, int y) {
         const RgbaImage &src = image->rgba();
-        for (int row = 0; row < src.height() && row + y < panel.height(); row++)
-            for (int col = 0; col < src.width() && col < panel.width(); col++)
-                if (src[row][col].a)
-                    panel[row + y][col] = src[row][col];
+        int factor = panelScale / image->scale(); // An image without its HD version is scaled up.
+        int top = y * panelScale;
+        for (int row = 0; row < src.height() * factor && row + top < panel.height(); row++)
+            for (int col = 0; col < src.width() * factor && col < panel.width(); col++)
+                if (Color c = src[row / factor][col / factor]; c.a)
+                    panel[row + top][col] = c;
     };
     blit(game_ui_minimap_frame, 0);
     blit(game_ui_rightframe, 141);
-    game_ui_right_panel_frame = GraphicsImage::Create(std::move(panel));
+    game_ui_right_panel_frame = GraphicsImage::Create(std::move(panel), panelScale);
 
     game_ui_player_alert_green = nullptr;
     game_ui_player_alert_yellow = nullptr;

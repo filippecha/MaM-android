@@ -17,6 +17,8 @@ class ImageLoader {
 
     virtual bool Load(RgbaImage *rgbaImage) = 0;
     int scale() const { return _scale; }
+    /** Ours: the texture holds palette indices, not colours (sprites), its transparent texels must stay as they are. */
+    virtual bool paletted() const { return false; }
 
  protected:
     std::string resource_name;
@@ -53,15 +55,21 @@ class ColorKey_LOD_Loader : public ImageLoader {
 
 class Image16bit_LOD_Loader : public ImageLoader {
  public:
-    inline Image16bit_LOD_Loader(LodTextureCache *lod, std::string_view filename) {
+    /**
+     * @param allowHd                   Ours: whether an HD replacement may be used. Minimaps are read pixel by pixel
+     *                                  at their original size, they keep it.
+     */
+    inline Image16bit_LOD_Loader(LodTextureCache *lod, std::string_view filename, bool allowHd = true) {
         this->resource_name = filename;
         this->lod = lod;
+        this->allowHd = allowHd;
     }
 
     virtual bool Load(RgbaImage *rgbaImage) override;
 
  protected:
     LodTextureCache *lod = nullptr;
+    bool allowHd = true;
 };
 
 class Alpha_LOD_Loader : public ImageLoader {
@@ -157,6 +165,7 @@ class Sprites_LOD_Loader : public ImageLoader {
     }
 
     virtual bool Load(RgbaImage *rgbaImage) override;
+    virtual bool paletted() const override { return true; }
 
  protected:
     LodSpriteCache *lod = nullptr;

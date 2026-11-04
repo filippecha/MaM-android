@@ -32,6 +32,10 @@ void main() {
     vec2 texuvmod = vec2(0.0);
     vec2 deltas = vec2(0.0);
     ivec3 texsize = textureSize(textureArray0,0);
+    // HD textures hold more pixels than the UVs of the game data assume, bits 20-22 of the attributes carry the ratio.
+    int texscale = (vsAttrib >> 20) & 7;
+    if (texscale < 1) texscale = 1;
+    vec2 ltex = vec2(texsize.xy) / float(texscale);
 
     // texture flow mods
     if (abs(vsNorm.z) >= 0.9) {
@@ -54,14 +58,14 @@ void main() {
         float pongperiod = mod(float(flowtimerms), 8000.0);
         float pongradians = pongperiod * radians(360.0) / 8000.0;
         float pongprogress = sin(pongradians);
-        deltas.x = pongprogress * float(texsize.x) * 0.01 * sin(texuv.x / float(texsize.x) * radians(360.0));
-        deltas.y = pongprogress * float(texsize.y) * 0.01 * sin(texuv.y / float(texsize.y) * radians(360.0));
+        deltas.x = pongprogress * ltex.x * 0.01 * sin(texuv.x / ltex.x * radians(360.0));
+        deltas.y = pongprogress * ltex.y * 0.01 * sin(texuv.y / ltex.y * radians(360.0));
 
         // Swirling movement.
         float flowperiod = mod(float(flowtimerms), 5000.0);
         float flowradians = flowperiod * radians(360.0) / 5000.0;
-        deltas.x += float(texsize.x) * 0.01 * sin(flowradians + texuv.y / float(texsize.y) * radians(360.0));
-        deltas.y += float(texsize.y) * 0.01 * cos(flowradians + texuv.x / float(texsize.x) * radians(360.0));
+        deltas.x += ltex.x * 0.01 * sin(flowradians + texuv.y / ltex.y * radians(360.0));
+        deltas.y += ltex.y * 0.01 * cos(flowradians + texuv.x / ltex.x * radians(360.0));
 
         // Small ripples.
         // TODO(captainurist): radians(360 * 32) looks better on portals, radians(360 * 16) looks better on lava,
@@ -69,14 +73,14 @@ void main() {
         //                     radians(360 * 24).
         float rippleperiod = mod(float(flowtimerms), 2000.0);
         float rippleradians = rippleperiod * radians(360.0) / 2000.0;
-        deltas.x = deltas.x - float(texsize.x) * 0.005 * cos(rippleradians + (texuv.y + deltas.y) / float(texsize.y) * radians(360.0 * 24.0));
+        deltas.x = deltas.x - ltex.x * 0.005 * cos(rippleradians + (texuv.y + deltas.y) / ltex.y * radians(360.0 * 24.0));
     } else {
-        deltas.x = texuvmod.x * mod(float(flowtimer), float(texsize.x));
-        deltas.y = texuvmod.y * mod(float(flowtimer), float(texsize.y));
+        deltas.x = texuvmod.x * mod(float(flowtimer), ltex.x);
+        deltas.y = texuvmod.y * mod(float(flowtimer), ltex.y);
     }
 
-    texcoords.x = (deltas.x + texuv.x) / float(texsize.x);
-    texcoords.y = (deltas.y + texuv.y) / float(texsize.y);
+    texcoords.x = (deltas.x + texuv.x) / ltex.x;
+    texcoords.y = (deltas.y + texuv.y) / ltex.y;
     fragcol = texture(textureArray0, vec3(texcoords.x,texcoords.y,olayer));
 
     vec4 toplayer = texture(textureArray0, vec3(texcoords.x,texcoords.y,0));

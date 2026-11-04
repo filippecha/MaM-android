@@ -25,7 +25,12 @@ class GraphicsImage {
     Sizei size();
 
     RgbaImage &rgba();
-    int scale() const { return _scale; }  // Texture pixels per logical pixel.
+    // Texture pixels per logical pixel. Loads the image, the scale is known once the HD replacement is read: the
+    // chest asked a not yet loaded exit button and its "Take all" copy came out three times too big on the phone.
+    int scale() {
+        initialize();
+        return _scale;
+    }
 
     const std::string &name();
 

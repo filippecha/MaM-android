@@ -15,15 +15,22 @@ import lod  # noqa: E402
 TRANSPARENT = {'hwtrdre', 'hwtrdrne', 'hwtrdrs', 'hwtrdrsw', 'hwtrdrxne', 'hwtrdrxse', 'hwtrdrn', 'hwtrdrnw', 'hwtrdrse',
                'hwtrdrw', 'hwtrdrxnw', 'hwtrdrxsw'}
 SKIP_PREFIX = ('pal', 'lightmap', 'shdwmap', 'pending', 'sign', 'warnsign', 'wharsign', 'bannwc', 'banwiz', 'wizh',
-               'ceb1tap', 'tap', 'splmsk', 'effpar', 'hwsplat', 'solid')
+               'ceb1tap', 'tap', 'splmsk', 'effpar', 'hwsplat', 'solid',
+               # MM8: letters of the alphabet puzzles and shop signs.
+               'alphanum', 'sgalch', 'sgarm', 'sgbank', 'sginn', 'sgmagic', 'sgspell', 'sgstabl', 'sgtrain', 'sgtvrn',
+               'sgweap')
 
 src, out = sys.argv[1:3]
 os.makedirs(out, exist_ok=True)
+mm8 = b'MMVIII' in open(src, 'rb').read(16)
+# MM8 (EnglishD.lod next to the LOD): the MM6/MM8 engine copy also keys the shore tiles without the "h" prefix.
+if any(f.lower() == 'englishd.lod' for f in os.listdir(os.path.dirname(os.path.abspath(src)))):
+    TRANSPARENT |= {t[1:] for t in TRANSPARENT}
 count = 0
 for key, (name, blob) in sorted(lod.entries(src).items()):
     if key.startswith(SKIP_PREFIX):
         continue
-    b = blob
+    b = blob[48:] if mm8 else blob  # MM8 entries start with a 64 byte name instead of 16.
     size, dsz, w, h = struct.unpack_from('<IIHH', b, 16)
     dec, = struct.unpack_from('<I', b, 40)
     px = b[48:48 + dsz]

@@ -1,0 +1,69 @@
+diff --git a/MaM 7/OpenEnroth/src/Engine/Graphics/Image.h b/MaM 7/OpenEnroth/src/Engine/Graphics/Image.h
+index 81bb9082..23605220 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Graphics/Image.h	
++++ b/MaM 7/OpenEnroth/src/Engine/Graphics/Image.h	
+@@ -25,7 +25,12 @@ class GraphicsImage {
+     Sizei size();
+ 
+     RgbaImage &rgba();
+-    int scale() const { return _scale; }  // Texture pixels per logical pixel.
++    // Texture pixels per logical pixel. Loads the image, the scale is known once the HD replacement is read: the
++    // chest asked a not yet loaded exit button and its "Take all" copy came out three times too big on the phone.
++    int scale() {
++        initialize();
++        return _scale;
++    }
+ 
+     const std::string &name();
+ 
+diff --git a/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp b/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp
+index b60f28de..b605ff11 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Objects/Character.cpp	
+@@ -1343,6 +1343,8 @@ int Character::ReceiveSpecialAttackEffect(MonsterSpecialAttack attType, Actor *p
+     if (engine->callObserver) {
+         engine->callObserver->notify(CALL_SPECIAL_ATTACK, attType);
+     }
++    if (cheatImmortal)
++        return 0;  // Ours: under the cheat no monster curses, breaks or steals anything.
+ 
+     int statcheck;
+     int statcheckbonus;
+diff --git a/MaM 7/OpenEnroth/src/Engine/Spells/CastSpellInfo.cpp b/MaM 7/OpenEnroth/src/Engine/Spells/CastSpellInfo.cpp
+index b97c9dc2..4a48ddce 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Spells/CastSpellInfo.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Spells/CastSpellInfo.cpp	
+@@ -1415,14 +1415,14 @@ void CastSpellInfoHelpers::castSpell() {
+                         // break items with low value
+                         if ((spell_item_to_enchant->GetValue() < 450 && !isWeapon(this_equip_type)) ||  // not weapons
+                                 (spell_item_to_enchant->GetValue() < 250 && isWeapon(this_equip_type))) {  // weapons
+-                            if (!(spell_item_to_enchant->flags & ITEM_HARDENED)) {
++                            if (!(spell_item_to_enchant->flags & ITEM_HARDENED) && !cheatImmortal) {  // Ours: cheat.
+                                 spell_item_to_enchant->SetBroken();
+                             }
+                             item_not_broken = false;
+                         } else {
+                             // random item break
+                             if (rnd >= success_chance_percent) {
+-                                if (!(spell_item_to_enchant->flags & ITEM_HARDENED)) {
++                                if (!(spell_item_to_enchant->flags & ITEM_HARDENED) && !cheatImmortal) {  // Ours: cheat.
+                                     spell_item_to_enchant->SetBroken();
+                                 }
+                             } else {
+diff --git a/MaM 7/OpenEnroth/src/Engine/Tables/QuestTable.cpp b/MaM 7/OpenEnroth/src/Engine/Tables/QuestTable.cpp
+index a353e93c..7367d17b 100644
+--- a/MaM 7/OpenEnroth/src/Engine/Tables/QuestTable.cpp	
++++ b/MaM 7/OpenEnroth/src/Engine/Tables/QuestTable.cpp	
+@@ -19,6 +19,11 @@ void initializeQuests(const Blob &quests) {
+     for (std::string_view line : split(quests.str()).by("\r\n").drop(1).skip("")) {
+         std::array<std::string_view, 2> tokens = split(line).by('\t');
+         QuestBit qbit = static_cast<QuestBit>(fromString<int>(tokens[0]));
+-        pQuestTable[qbit] = unquote(tokens[1]);
++        std::string text = unquote(tokens[1]);
++        // Ours: the unused bits 271 and up have the text "0", the quest book showed it as a quest "0" once a script
++        // set one of them. They stay empty, so the book leaves them out.
++        if (text == "0")
++            continue;
++        pQuestTable[qbit] = text;
+     }
+ }

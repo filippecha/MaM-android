@@ -363,12 +363,13 @@ GraphicsImage *rotatedIcon(std::string_view name) {
     static std::map<std::string, GraphicsImage *, std::less<>> cache;
     if (auto pos = cache.find(name); pos != cache.end())
         return pos->second;
-    const RgbaImage &source = assets->getImage_ColorKey(name)->rgba();
+    GraphicsImage *icon = assets->getImage_ColorKey(name);
+    const RgbaImage &source = icon->rgba();
     RgbaImage rotated = RgbaImage::uninitialized(source.height(), source.width());
     for (int y = 0; y < rotated.height(); y++)
         for (int x = 0; x < rotated.width(); x++)
             rotated[y][x] = source[x][source.width() - 1 - y];
-    GraphicsImage *result = GraphicsImage::Create(std::move(rotated));
+    GraphicsImage *result = GraphicsImage::Create(std::move(rotated), icon->scale());
     cache.emplace(std::string(name), result);
     return result;
 }

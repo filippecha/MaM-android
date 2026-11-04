@@ -97,12 +97,12 @@ GraphicsImage *AssetsManager::getImage_ColorKey(std::string_view name, Color col
 
 
 
-GraphicsImage *AssetsManager::getImage_Solid(std::string_view name) {
+GraphicsImage *AssetsManager::getImage_Solid(std::string_view name, bool allowHd) {
     std::string filename = ascii::toLower(name);
 
     auto i = images.find(filename);
     if (i == images.end()) {
-        auto image = GraphicsImage::Create(std::make_unique<Image16bit_LOD_Loader>(pIcons_LOD, filename));
+        auto image = GraphicsImage::Create(std::make_unique<Image16bit_LOD_Loader>(pIcons_LOD, filename, allowHd));
         images[filename] = image;
         return image;
     }

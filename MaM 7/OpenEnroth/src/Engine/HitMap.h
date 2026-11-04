@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 #include <algorithm>
+#include <cstdlib>
 
 #include "Library/Geometry/Point.h"
 #include "Library/Geometry/Rect.h"
@@ -56,25 +57,29 @@ class HitMap {
      *                                  or `defaultValue` if no such image exists.
      */
     T query(Pointi point, T defaultValue = {}) const {
-        if (!_bounds.contains(point))
+        if (!Recti(_bounds.x - kSlack, _bounds.y - kSlack, _bounds.w + 2 * kSlack, _bounds.h + 2 * kSlack).contains(point))
             return defaultValue;
 
         // Iterate entries in reverse order (topmost first).
-        for (auto it = _entries.rbegin(); it != _entries.rend(); ++it) {
-            const Entry &entry = *it;
+        for (auto it = _entries.rbegin(); it != _entries.rend(); ++it)
+            if (opaque(*it, point))
+                return it->value;
 
-            Pointi relativePos = point - entry.position;
-            if (entry.image->rgba().geometry().contains(relativePos)) {
-                Color color = entry.image->rgba()[relativePos];
-                if (color.a > 0)
-                    return entry.value;
-            }
-        }
+        // Ours: a finger or a click just beside an item still takes it, the nearest item within a few pixels wins.
+        for (int r = 1; r <= kSlack; r++)
+            for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                    if (std::max(std::abs(dx), std::abs(dy)) == r)
+                        for (auto it = _entries.rbegin(); it != _entries.rend(); ++it)
+                            if (opaque(*it, point + Pointi(dx, dy)))
+                                return it->value;
 
         return defaultValue;
     }
 
  private:
+    static constexpr int kSlack = 4; // Logical pixels.
+
     struct Entry {
         Pointi position;
         GraphicsImage *image = nullptr;
@@ -82,6 +87,18 @@ class HitMap {
 
         Entry(Pointi pos, GraphicsImage *img, T val) : position(pos), image(img), value(val) {}
     };
+
+    // Ours: the point is in logical pixels, an HD texture has scale() texture pixels per logical one. Reading it
+    // unscaled tested only the top left third of every item on the paperdoll, it was hard to take anything off.
+    static bool opaque(const Entry &entry, Pointi point) {
+        Pointi relativePos = point - entry.position;
+        if (!Recti(Pointi(0, 0), entry.image->size()).contains(relativePos))
+            return false;
+        int s = entry.image->scale();
+        RgbaImage &rgba = entry.image->rgba();
+        Pointi pixel = relativePos * s + Pointi(s / 2, s / 2);
+        return rgba.geometry().contains(pixel) && rgba[pixel].a > 0;
+    }
 
     std::vector<Entry> _entries;
     Recti _bounds; // Bounding rectangle of all images.
